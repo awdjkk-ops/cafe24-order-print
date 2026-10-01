@@ -99,6 +99,9 @@ def apply(root):
         st.map("Page." + base, background=[("active", BG)])
     st.configure("Big.TCheckbutton", font=f(12, True))
     st.configure("Warn.TCheckbutton", background="#FFF8E6", font=f(10, True))
+    st.configure("Split.TCheckbutton", background="#F1FAEC", font=f(10, True))
+    st.map("Split.TCheckbutton", background=[("active", "#F1FAEC")], indicatorbackground=[("selected", GREEN)],
+           indicatorforeground=[("selected", "white")])
     st.map("Warn.TCheckbutton", background=[("active", "#FFF8E6")], indicatorbackground=[("selected", GREEN)],
            indicatorforeground=[("selected", "white")])
     st.configure("PageBig.TCheckbutton", background=BG, font=f(12, True))

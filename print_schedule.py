@@ -27,6 +27,7 @@ DEFAULT_SETTINGS = {
     # 날짜 지정: 그날의 오전·오후를 통째로 정함. 둘 다 off면 쉬는 날
     # [{"date": "2026-10-15", "am": {"on": true, "time": "10:00"}, "pm": {"on": false, "time": "14:00"}}]
     "exceptions": [],
+    "smart_split_weekdays": {"0": True},   # 스마트스토어 따로 작업 기본 요일 (월요일)
 }
 
 

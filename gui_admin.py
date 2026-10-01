@@ -339,8 +339,11 @@ class AdminTab(ttk.Frame):
         import updater
         up = getattr(self.app, "pending_update", None)
         cur = updater.local_info().get("version", "?")
-        self.ver_lb.configure(text=f"지금 버전 v{cur}" + (f"  →  새 버전 v{up['version']} 있음" if up else "  (최신)"),
-                              foreground=T.BLUE if up else T.INK)
+        state = getattr(self.app, "update_state", "checking")
+        tail = (f"  →  새 버전 v{up['version']} 있음" if up else "  (최신)" if state == "ok"
+                else "  (새 버전 확인 못 함 · 인터넷 연결 확인)" if state == "fail" else "  (확인 중...)")
+        self.ver_lb.configure(text=f"지금 버전 v{cur}" + tail,
+                              foreground=T.BLUE if up else T.ORANGE if state == "fail" else T.INK)
         bs = updater.backups()
         self.bak_lb.configure(text=f"되돌릴 수 있는 이전 버전: v{bs[0].name.split('_')[0]}" if bs else "되돌릴 이전 버전 없음")
 

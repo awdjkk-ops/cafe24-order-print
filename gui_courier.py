@@ -123,7 +123,7 @@ class CourierTab(ttk.Frame):
         self._fill(h.get("texts", {}))
         self.res_title.configure(text=f"확인 목록 — {h['time'][5:16].replace('T', ' ')} 택배 파일")
         self.last = {"path": h["file"]}
-        self.app.label_tab.set_target(ids=h.get("orders", []),
+        self.app.label_tab.set_target(ids=h.get("orders", []), split_n=h.get("split_orders", 0),
                                       title=f"{h['time'][5:16].replace('T', ' ')} 택배 파일의 주문 {len(h.get('orders', []))}건")
 
     def run(self, create):
@@ -153,8 +153,10 @@ class CourierTab(ttk.Frame):
             self._fill(r["texts"])
             self.res_title.configure(text="확인 목록 — " + ("방금 만든 택배 파일" if create else "미리 확인 (파일 안 만듦)"))
             n_orders = len(r["orders"])
+            sp = r.get("split_orders", 0)
             info = (f"주문 {n_orders}건 → 택배 {len(a['rows'])}건"
                     + (f" (추가배송 {len(a['extra'])}건 포함)" if a["extra"] else "")
+                    + (f"\n스마트스토어 따로 작업: 스마트스토어 쪽 {sp}건이 맨 앞 (엑셀 2~{sp + 1}번째 줄)" if sp else "")
                     + f"\n묶음배송 {len(a['bundle'])}묶음 · 블랙리스트·경계대상 {len(a['blacklist'])}건"
                     + (f"\n인쇄 후 취소되어 뺀 주문 {len(r['excluded'])}건: {', '.join(r['excluded'][:5])}" if r["excluded"] else ""))
             if r["path"]:

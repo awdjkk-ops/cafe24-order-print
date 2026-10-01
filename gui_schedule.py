@@ -58,6 +58,19 @@ class ScheduleTab(ttk.Frame):
             ttk.Label(rows, text="   ").grid(row=i + 1, column=5)
             self.wd.append(slots)
 
+        # 스마트스토어 따로 작업 요일
+        spf = ttk.LabelFrame(left, text=" 스마트스토어 따로 작업 (요일 기본값) ", padding=10)
+        spf.grid(row=7, column=0, sticky="we", pady=(10, 0))
+        hint(spf, "체크한 요일에는 자동 출력·지금 출력·택배 파일·라벨에서 스마트스토어 쪽 주문이 맨 앞에 모이고, 주문서 사이에 "
+                  "'여기까지 스마트스토어' 구분 용지가 들어갑니다. 그날그날은 출력 탭의 스위치로 바꿀 수 있습니다.",
+             row=0, column=0, columnspan=7, sticky="w", pady=(0, 6))
+        self.split_days = []
+        sd = self.s.get("smart_split_weekdays", {})
+        for i, name in enumerate(sch.WEEKDAYS):
+            v = tk.BooleanVar(value=bool(sd.get(str(i))))
+            ttk.Checkbutton(spf, text=name, variable=v, command=self.changed).grid(row=1, column=i, sticky="w", padx=(0, 8))
+            self.split_days.append(v)
+
         self.holi = tk.BooleanVar(value=self.s["skip_public_holidays"])
         ttk.Checkbutton(left, text="공휴일은 자동으로 건너뛰기 (설·추석 연휴, 대체공휴일 포함)",
                         variable=self.holi, command=self.changed, style="Page.TCheckbutton").grid(row=3, column=0, sticky="w", pady=(8, 0))
@@ -101,7 +114,7 @@ class ScheduleTab(ttk.Frame):
         self.rtc_hint.grid(row=2, column=0, sticky="w", pady=(4, 0))
 
         # 저장
-        bf = ttk.Frame(left, style="Page.TFrame"); bf.grid(row=7, column=0, sticky="we", pady=(10, 0))
+        bf = ttk.Frame(left, style="Page.TFrame"); bf.grid(row=9, column=0, sticky="we", pady=(10, 0))
         self.dirty_lb = ttk.Label(bf, text="", foreground=T.ORANGE, style="Page.TLabel"); self.dirty_lb.pack(side="left")
         ttk.Button(bf, text="저장", command=self.save, style="Accent.TButton").pack(side="right")
         ttk.Button(bf, text="되돌리기", command=self.revert).pack(side="right", padx=6)
@@ -178,6 +191,7 @@ class ScheduleTab(ttk.Frame):
         s["skip_public_holidays"] = self.holi.get()
         s["power_mode"] = self.power.get()
         s["weekdays"] = {str(i): {k: self._slot_val(sl[k]) for k in sch.SLOTS} for i, sl in enumerate(self.wd)}
+        s["smart_split_weekdays"] = {str(i): v.get() for i, v in enumerate(self.split_days)}
         s["exceptions"] = [self._exc[d] for d in sorted(self._exc)]
         return s
 
@@ -329,6 +343,8 @@ class ScheduleTab(ttk.Frame):
         for i, sl in enumerate(self.wd):
             for k in sch.SLOTS:
                 self._slot_set(sl[k], self.s["weekdays"][str(i)][k])
+        for i, v in enumerate(self.split_days):
+            v.set(bool(self.s.get("smart_split_weekdays", {}).get(str(i))))
         self._set_exceptions(self.s["exceptions"])
         self.dirty = False
         self.refresh()
@@ -341,7 +357,7 @@ class ScheduleTab(ttk.Frame):
         old = (dt.date.today() - dt.timedelta(days=30)).isoformat()
         s["exceptions"] = [e for e in s["exceptions"] if e["date"] >= old]
         latest = sch.load_settings()           # 다른 탭에서 바꾼 값(보관 기간·라벨 보정 등)은 그대로 두고
-        for k in ("auto_enabled", "skip_public_holidays", "power_mode", "weekdays", "exceptions"):
+        for k in ("auto_enabled", "skip_public_holidays", "power_mode", "weekdays", "exceptions", "smart_split_weekdays"):
             latest[k] = s[k]                     # 이 탭의 항목만 바꿔서 저장
         s = latest
         sch.save_settings(s)

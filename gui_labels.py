@@ -42,6 +42,14 @@ class LabelTab(ttk.Frame):
         self.count_lb = ttk.Label(tf, text="", wraplength=280, justify="left"); self.count_lb.grid(row=1, column=0, sticky="w", pady=(4, 0))
         hint(tf, "택배 탭에서 택배 파일을 만들거나 미리 확인하면 그 주문으로 라벨이 준비됩니다. "
                  "예전 택배 파일을 고르면 그 주문으로 바뀝니다.", row=2, column=0, sticky="w", pady=(6, 0), wrap=280)
+        lg = ttk.Frame(tf); lg.grid(row=3, column=0, sticky="w", pady=(8, 0))
+        for color, text in (("#FFC0CB", "일반"), ("#FFFF00", "묶음배송"), ("#B7E4B0", "스마트스토어 묶음배송")):
+            tk.Label(lg, text="  ", bg=color, relief="solid", bd=1).pack(side="left")
+            ttk.Label(lg, text=f" {text}  ", style="Hint.TLabel").pack(side="left")
+        self.split_new_page = tk.BooleanVar(value=True)
+        self.split_cb = ttk.Checkbutton(tf, text="스마트스토어 다음은 새 장부터", variable=self.split_new_page,
+                                        command=self.draw)
+        self.split_hint = ttk.Label(tf, text="", style="Hint.TLabel", wraplength=280, justify="left")
 
         pf = ttk.LabelFrame(left, text=" 인쇄 ", padding=10); pf.grid(row=1, column=0, sticky="we", pady=(10, 0))
         self.b_print = ttk.Button(pf, text="라벨 인쇄", style="Main.TButton", command=lambda: self.output("pdf"))
@@ -86,10 +94,24 @@ class LabelTab(ttk.Frame):
         self.draw()
 
     # ------------------------------------------------------------ 대상 설정 (택배 탭에서 호출)
-    def set_target(self, rows=None, ids=None, title=""):
-        self.rows, self.ids, self.title = rows, ids, title
+    def set_target(self, rows=None, ids=None, title="", split_n=0):
+        self.rows, self.ids, self.title, self.split_n = rows, ids, title, split_n
         self.used, self.page, self.last_click = {}, 0, None
         self.draw()
+
+    def _break_at(self):
+        if self.rows is None:
+            return None
+        b = L.split_break(self.rows)
+        if b is None:
+            self.split_cb.grid_remove(); self.split_hint.grid_remove()
+            return None
+        n_smart = len(L.build_sequence([r for r in self.rows if r.get("_split")]))
+        self.split_cb.grid(row=4, column=0, sticky="w", pady=(8, 0))
+        self.split_hint.configure(text=f"스마트스토어 쪽 라벨 {n_smart}칸이 앞쪽에 있습니다. 체크하면 나머지 라벨은 "
+                                       "새 장부터 시작해서, 스마트스토어 라벨을 장 단위로 넘기기 편합니다.")
+        self.split_hint.grid(row=5, column=0, sticky="w")
+        return b if self.split_new_page.get() else None
 
     def ensure_rows(self, then):
         if self.rows is not None:
@@ -102,14 +124,15 @@ class LabelTab(ttk.Frame):
             self.rows = rows
             self.draw()
             then()
-        self.app.bg(lambda prog: op.rows_for_orders(self.app.cfg, op.get_access_token(self.app.cfg), self.ids, prog),
+        self.app.bg(lambda prog: op.rows_for_orders(self.app.cfg, op.get_access_token(self.app.cfg), self.ids, prog,
+                                                    getattr(self, "split_n", 0)),
                     done, "카페24에서 주문 불러오는 중...", progress=True)
 
     # ------------------------------------------------------------ 그리기
     def _pages(self):
         if self.rows is None:
             return None
-        return L.paginate(L.build_sequence(self.rows), self.used)
+        return L.paginate(L.build_sequence(self.rows), self.used, self._break_at())
 
     def _cut(self, text, font, width):
         if font.measure(text) <= width:
@@ -267,7 +290,8 @@ class LabelTab(ttk.Frame):
                 return
 
             def work():
-                path, n, pg = op.make_labels(self.app.cfg, self.rows, self.used, kind)
+                path, n, pg = op.make_labels(self.app.cfg, self.rows, self.used, kind,
+                                             self._break_at() is not None)
                 if kind == "pdf":
                     op.print_pdf(self.app.cfg, path, exact=True)
                 return path, n, pg

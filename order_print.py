@@ -450,6 +450,38 @@ def compare_with_cafe24(cfg, token, original_csv, progress=None):
 
 PRINT_KINDS = ("자동", "수동", "선택 출력")   # 새로 인쇄한 것 (다시 뽑기·기준 조정은 제외)
 
+# ---------------------------------------------------------------- 스마트스토어 따로 작업 (예: 주문 많은 월요일)
+SMART = "shopn"
+SPLIT_TODAY_FILE = DATA / "split_today.json"
+
+
+def split_on(day=None):
+    """오늘 '스마트스토어 따로 작업'이 켜져 있는지: 그날 스위치가 있으면 그걸, 없으면 요일 설정"""
+    day = day or dt.date.today()
+    t = read_json(SPLIT_TODAY_FILE, {})
+    if t.get("date") == day.isoformat():
+        return bool(t.get("on"))
+    return bool(sch.load_settings().get("smart_split_weekdays", {}).get(str(day.weekday())))
+
+
+def set_split_today(on):
+    write_json(SPLIT_TODAY_FILE, {"date": dt.date.today().isoformat(), "on": bool(on)})
+
+
+def _cust_key(o):
+    import courier as C
+    rcv = (o.get("receivers") or [{}])[0] or {}
+    addr = rcv.get("address_full") or f"{rcv.get('address1') or ''} {rcv.get('address2') or ''}"
+    return C.normalize_text(rcv.get("name")) + "||" + C.normalize_text(addr)
+
+
+def split_orders(orders):
+    """스마트스토어 쪽(스마트스토어 주문 + 그 고객의 다른 경로 주문)과 나머지로 나눔. 각각 원래 순서 유지."""
+    smart_custs = {_cust_key(o) for o in orders if o.get("order_place_id") == SMART}
+    smart = [o for o in orders if _cust_key(o) in smart_custs]
+    rest = [o for o in orders if _cust_key(o) not in smart_custs]
+    return smart, rest
+
 # ---------------------------------------------------------------- 택배 발송용 파일
 COURIER_DONE_FILE = DATA / "courier_done.json"
 COURIER_HIST_FILE = DATA / "courier_history.json"
@@ -479,12 +511,12 @@ def _label_fonts(cfg):
     return cfg.get("font_path"), cfg.get("font_bold_path")
 
 
-def make_labels(cfg, rows, used=None, kind="pdf"):
+def make_labels(cfg, rows, used=None, kind="pdf", new_page_after_smart=False):
     """rows(카페24 엑셀 형식 줄) → 라벨 PDF(바로 인쇄용) 또는 엑셀. (경로, 라벨 칸 수, 장 수)"""
     import labels as L
     seq = L.build_sequence(rows)
     ykeys = L.yellow_keys(rows)
-    pages = L.paginate(seq, used or {})
+    pages = L.paginate(seq, used or {}, L.split_break(rows) if new_page_after_smart else None)
     stamp = dt.datetime.now().strftime("%Y-%m-%d_%H%M")
     if kind == "xlsx":
         path = COURIER_DIR / f"라벨_{stamp}.xlsx"
@@ -503,11 +535,29 @@ def print_calibration(cfg):
     print_pdf(cfg, path, exact=True)
 
 
-def rows_for_orders(cfg, token, ids, progress=None):
-    """주문번호들 → 카페24 엑셀 형식 줄 (예전 택배 파일의 라벨을 다시 뽑을 때)"""
+def _rows_with_place(orders, split_n=None):
+    """카페24 엑셀 형식 줄 + 라벨용 정보(주문경로, 스마트스토어 쪽인지). 택배 파일에는 이 정보가 쓰이지 않음."""
+    smart_ids = {o["order_id"] for o in split_orders(orders)[0]} if split_n is None else \
+        {o["order_id"] for o in orders[:split_n]}
+    out = []
+    for o in orders:
+        for r in order_csv_rows(o):
+            d = dict(zip(CSV_HEADERS, r))
+            d["_place"] = o.get("order_place_id") or ""
+            d["_split"] = o["order_id"] in smart_ids if split_n is not None or split_on() else False
+            out.append(d)
+    return out
+
+
+def rows_for_orders(cfg, token, ids, progress=None, split_n=0):
+    """주문번호들 → 카페24 엑셀 형식 줄 (예전 택배 파일의 라벨을 다시 뽑을 때). 순서는 ids 순서 그대로."""
     orders = fetch_orders_by_ids(cfg, token, ids, progress)
     verify_orders(orders, "라벨 만들기")
-    return [dict(zip(CSV_HEADERS, r)) for o in orders for r in order_csv_rows(o)]
+    pos = {oid: i for i, oid in enumerate(ids)}
+    orders.sort(key=lambda o: pos.get(o["order_id"], 10 ** 9))
+    keep = set(ids[:split_n])
+    smart_n = sum(1 for o in orders if o["order_id"] in keep)
+    return _rows_with_place(orders, smart_n)
 
 
 def load_courier_history():
@@ -523,7 +573,12 @@ def make_courier(cfg, token, ids, create=True, progress=None):
     excluded = []
     orders = fetch_orders_by_ids(cfg, token, ids, progress, excluded)
     verify_orders(orders, "택배 파일 만들기")
-    rows = [dict(zip(CSV_HEADERS, r)) for o in orders for r in order_csv_rows(o)]
+    split_n = 0
+    if split_on():
+        smart, rest = split_orders(orders)
+        orders = smart + rest
+        split_n = len(smart)
+    rows = _rows_with_place(orders)
 
     blacklist = []
     if url:
@@ -548,7 +603,8 @@ def make_courier(cfg, token, ids, create=True, progress=None):
 
     a = C.analyze(rows, extra, blacklist)
     result = {"analysis": a, "texts": C.summary_texts(a), "popup": C.popup_text(a), "path": None,
-              "excluded": excluded, "orders": orders, "rows": rows, "warnings": warnings}
+              "excluded": excluded, "orders": orders, "rows": rows, "warnings": warnings,
+              "split_orders": split_n, "split_rows": sum(1 for r in rows if r.get("_split"))}
     if not create:
         return result
 
@@ -574,7 +630,7 @@ def make_courier(cfg, token, ids, create=True, progress=None):
     done.update({oid: now + " 취소" for oid in excluded})     # 취소된 주문도 다시 대기에 안 나오게
     write_json(COURIER_DONE_FILE, done)
     hist = load_courier_history()
-    hist.insert(0, {"time": now, "file": str(path), "orders": [o["order_id"] for o in orders],
+    hist.insert(0, {"time": now, "file": str(path), "orders": [o["order_id"] for o in orders], "split_orders": split_n,
                     "count": len(a["rows"]), "extra": len(a["extra"]), "texts": result["texts"],
                     "popup": result["popup"], "excluded": excluded})
     write_json(COURIER_HIST_FILE, hist[:60])
@@ -1024,29 +1080,36 @@ def new_orders(cfg, token):
 LAST_END_PAGES = 0
 
 
-def make_pdf(cfg, token, orders, prefix, progress=None, end_sheet=False):
+def make_pdf(cfg, token, orders, prefix, progress=None, end_sheet=False, split=False):
     verify_orders(orders, "주문서 만들기")
     sheet = setup_fonts(cfg)
     images = fetch_images(cfg, token, orders)
+    divider = None
+    if split:
+        smart, rest = split_orders(orders)
+        if smart and rest:
+            orders[:] = smart + rest            # 스마트스토어 쪽을 맨 앞으로 (출력 기록도 이 순서)
+            divider = {"index": len(smart), "smart": len(smart), "rest": len(rest)}
     views = [sheet.to_view(o, images) for o in orders]
     pdf = PDF_DIR / f"{prefix}_{dt.datetime.now():%Y%m%d_%H%M%S}.pdf"
     end_info = None
     if end_sheet:     # 자동 출력: 주문서 장 수를 먼저 알아낸 뒤 맨 뒤에 출력 확인 용지
-        pages0 = sheet.build_orders_pdf(views, pdf, None)
+        pages0 = sheet.build_orders_pdf(views, pdf, None, None, divider)
         now = dt.datetime.now()
         end_info = {"when": f"{now:%m/%d}({'월화수목금토일'[now.weekday()]}) {now:%H:%M}",
                     "count": len(orders), "pages": pages0, "orders": [order_brief(o) for o in orders]}
-    pages = sheet.build_orders_pdf(views, pdf, progress, end_info)
+    pages = sheet.build_orders_pdf(views, pdf, progress, end_info, divider)
     global LAST_END_PAGES
     LAST_END_PAGES = pages - end_info["pages"] if end_info else 0      # 출력 확인 용지 장 수
     log.info(f"PDF 생성: {pdf.name} ({len(orders)}건, {pages}장)")
     return pdf, pages
 
 
-def print_orders(cfg, token, orders, kind, progress=None, record=True, end_sheet=False, stage=None):
+def print_orders(cfg, token, orders, kind, progress=None, record=True, end_sheet=False, stage=None, split=False):
     """주문서 만들기 → 인쇄 → (record면) 중복 방지 기록 → 출력 기록 추가"""
     verify_orders(orders, "주문서 인쇄")
-    pdf, pages = make_pdf(cfg, token, orders, "주문서" if record else "다시뽑기", progress, end_sheet)
+    orders = list(orders)
+    pdf, pages = make_pdf(cfg, token, orders, "주문서" if record else "다시뽑기", progress, end_sheet, split)
     if stage:
         stage("인쇄 중", pdf=str(pdf), pages=pages)
     print_pdf(cfg, pdf)
@@ -1341,7 +1404,8 @@ def run(cfg, mode):
                     if phase == "인쇄 중":
                         sent["pdf"] = kw.get("pdf")
                     orig_stage(phase, **kw)
-                pdf, pages = print_orders(cfg, token, orders, "자동", prog, end_sheet=True, stage=stage2)
+                pdf, pages = print_orders(cfg, token, orders, "자동", prog, end_sheet=True, stage=stage2,
+                                          split=split_on(today))
                 sent["pdf"] = str(pdf)
                 sent["printed"] = True
                 check_stop()

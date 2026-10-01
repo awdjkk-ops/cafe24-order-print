@@ -11,6 +11,7 @@ PER_PAGE = 145
 COLS, ROWS = 5, 29
 WEBSITE = "www.beadsmaker.com"
 PINK, YELLOW, GREY, OPT_BLUE = "FFFFC0CB", "FFFFFF00", "FFBFBFBF", "FF4F81BD"
+GREEN = "FFB7E4B0"      # 스마트스토어 주문이 들어 있는 묶음배송 (연한 초록)
 
 # 라벨지 실제 규격(mm) — 30x9mm 칸, 가로 간격 5mm, 세로는 틈 없음
 SHEET = {"left": 20.0, "top": 18.0, "w": 30.0, "h": 9.0, "pitch_x": 35.0, "pitch_y": 9.0}
@@ -37,30 +38,48 @@ def build_sequence(rows):
 
 
 def yellow_keys(rows):
-    """같은 사람(이름+주소)이 주문을 2건 이상 → 이름 칸 노란색"""
-    by = {}
+    """묶음배송(같은 사람 이름+주소가 주문 2건 이상)의 이름 칸 색: {고객: 색}
+    노랑이 기본, 묶음 안에 스마트스토어 주문이 하나라도 있으면 연한 초록."""
+    by, smart = {}, set()
     for r in rows:
-        by.setdefault(_t(r, "수령인") + "||" + _t(r, "주소"), set()).add(_t(r, "주문번호"))
-    return {k for k, v in by.items() if len(v) >= 2}
+        k = _t(r, "수령인") + "||" + _t(r, "주소")
+        by.setdefault(k, set()).add(_t(r, "주문번호"))
+        if r.get("_place") == "shopn":
+            smart.add(k)
+    return {k: (GREEN if k in smart else YELLOW) for k, v in by.items() if len(v) >= 2}
 
 
 def name_color(item, ykeys):
+    if isinstance(ykeys, dict):
+        return ykeys.get(item["key"], PINK)
     return YELLOW if item["key"] in ykeys else PINK
 
 
-def paginate(seq, used_by_page=None):
-    """페이지별 사용한 칸(1~145)을 건너뛰고 채움. 칸 번호는 위→아래, 왼쪽 줄부터."""
+def split_break(rows):
+    """스마트스토어 쪽 라벨이 끝나는 위치(라벨 칸 순번). 나눠서 작업하지 않으면 None"""
+    smart = [r for r in rows if r.get("_split")]
+    if not smart or len(smart) == len(rows):
+        return None
+    return len(build_sequence(smart))
+
+
+def paginate(seq, used_by_page=None, break_at=None):
+    """페이지별 사용한 칸(1~145)을 건너뛰고 채움. 칸 번호는 위→아래, 왼쪽 줄부터.
+    break_at: 이 순번의 라벨부터는 새 장에서 시작 (스마트스토어 다음 나머지)"""
     used_by_page = used_by_page or {}
     pages, i, p = [], 0, 0
     while True:
         used = used_by_page.get(p, set())
         page = [None] * PER_PAGE
+        placed = 0
         for slot in range(1, PER_PAGE + 1):
             if slot in used:
                 continue
             if i >= len(seq):
                 break
-            page[slot - 1] = seq[i]; i += 1
+            if break_at and i == break_at and placed:
+                break                                  # 남은 칸은 비우고 다음 장부터
+            page[slot - 1] = seq[i]; i += 1; placed += 1
         pages.append(page)
         p += 1
         if i >= len(seq) or p > 2000:

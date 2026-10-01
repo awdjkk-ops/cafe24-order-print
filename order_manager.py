@@ -47,6 +47,7 @@ class App(tk.Tk):
                                     cursor="hand2")
         self.update_pill.bind("<Button-1>", lambda e: self.do_update())
         self.pending_update = None
+        self.update_state = "checking"
         self.auto_pill = T.pill(top, "자동 출력 확인 중")
         self.auto_pill.pack(side="right", padx=(8, 22))
         self.result_pill = T.pill(top, "")
@@ -111,7 +112,9 @@ class App(tk.Tk):
     def check_update(self, manual=False):
         def done(res):
             ok, upd = res
+            self.update_state = "ok" if ok else "fail"
             if not ok:
+                self.admin_tab.refresh_update()
                 if manual:
                     messagebox.showwarning("업데이트 확인", f"새 버전을 확인하지 못했습니다.\n\n{upd}")
                 return
@@ -310,6 +313,16 @@ class App(tk.Tk):
         hint(af, "지금 출력: 마지막 출력 이후 새로 들어온 주문을 바로 인쇄합니다. 인쇄 전에 한 번 확인하고, 출력한 주문은 "
                  "기록되어 다시 나오지 않습니다.\n미리보기: 인쇄하지 않고 주문서를 화면으로만 봅니다.",
              row=1, column=0, sticky="w", pady=(8, 0), wrap=430)
+        sp = tk.Frame(af, bg="#F1FAEC", highlightbackground="#B7E4B0", highlightthickness=1)
+        sp.grid(row=2, column=0, sticky="we", pady=(10, 0))
+        self.split_var = tk.BooleanVar(value=op.split_on())
+        ttk.Checkbutton(sp, text="오늘 스마트스토어 따로 작업", variable=self.split_var, style="Split.TCheckbutton",
+                        command=self.toggle_split).grid(row=0, column=0, sticky="w", padx=8, pady=(6, 0))
+        self.split_lb = tk.Label(sp, text="", bg="#F1FAEC", fg=T.MUTED, font=T.f(9), justify="left", wraplength=410, anchor="w")
+        self.split_lb.grid(row=1, column=0, sticky="w", padx=10)
+        b13 = ttk.Button(sp, text="전체 인쇄 · 스마트스토어 나눠서", command=lambda: self.print_now(split=True))
+        b13.grid(row=2, column=0, sticky="w", padx=8, pady=(4, 8))
+        self._split_text()
 
         # 출력주문 엑셀
         xf = ttk.LabelFrame(left, text=" 출력주문 엑셀 (택배 발송용 원본) ", padding=10)
@@ -431,7 +444,7 @@ class App(tk.Tk):
         b6.grid(row=3, column=1, sticky="e", pady=(6, 0))
         hint(of, "고른 주문만 카페24에서 새로 불러와 인쇄합니다(여러 개: Ctrl+클릭). 오래된 주문도 가능합니다.",
              row=4, column=0, columnspan=2, sticky="w", wrap=640)
-        self.action_buttons = [b, b1, b2, b3, b4, b5, b6, b7, b8, b9, b10, bs, br, b11, b12]
+        self.action_buttons = [b, b1, b2, b3, b4, b5, b6, b7, b8, b9, b10, bs, br, b11, b12, b13]
 
     # ---------------------------------------------------------------- 상태
     def _set_status(self, key, level, text):
@@ -488,6 +501,38 @@ class App(tk.Tk):
         for msg in self._alerts.values():
             T.alert(self.alert_fr, msg).pack(fill="x", pady=(0, 6))
 
+    def toggle_split(self):
+        op.set_split_today(self.split_var.get())
+        op.log.info(f"[스마트스토어 따로 작업] 오늘 {'켬' if self.split_var.get() else '끔'}")
+        self._split_text()
+
+    def _split_text(self):
+        on = op.split_on()
+        self.split_var.set(on)
+        self.split_lb.configure(text=("켜짐: 지금 출력·자동 출력·택배 파일·라벨에서 스마트스토어 쪽(그 고객의 다른 경로 주문 포함)이 "
+                                      "맨 앞에 모이고, 주문서 사이에 구분 용지가 들어갑니다." if on else
+                                      "꺼짐: 평소처럼 결제시각 순서대로. 요일 기본값은 자동 출력 설정 탭에서 정합니다.")
+                                 + "\n아래 버튼은 스위치와 상관없이 이번 한 번만 나눠서 인쇄합니다.")
+
+    def print_place(self, place):
+        """타일을 누르면 그 경로의 '다음에 출력' 주문만 인쇄"""
+        if self.busy:
+            return
+        targets = [o for o, done, _ in self.board_rows if not done
+                   and op.PLACE_NAMES.get(o.get("order_place_id"), "기타") == place]
+        if not targets:
+            return
+        if not messagebox.askyesno("이 경로만 출력", f"{place} 주문 {len(targets)}건만 인쇄할까요?\n"
+                                                    "나머지 주문은 다음 출력에 그대로 나옵니다."):
+            return
+
+        def work(prog):
+            token = op.get_access_token(self.cfg)
+            with op.run_lock():
+                op.log.info(f"[경로별 출력] {place} {len(targets)}건")
+                return op.print_orders(self.cfg, token, targets, "선택 출력", prog)
+        self.bg(work, lambda r: self._printed(len(targets), r), f"{place} 주문서 준비 중...", progress=True)
+
     def _render_tiles(self, todo):
         for w in self.tiles_fr.winfo_children():
             w.destroy()
@@ -497,7 +542,16 @@ class App(tk.Tk):
             ttk.Label(self.tiles_fr, text="새로 출력할 주문이 없습니다.", style="PageHint.TLabel").grid(row=0, column=0, sticky="w")
             return
         for i, (name, n) in enumerate(cnt.most_common()):
-            T.tile(self.tiles_fr, name, n, width=138).grid(row=i // 3, column=i % 3, padx=(0, 8), pady=(0, 8))
+            t = T.tile(self.tiles_fr, name, n, width=138)
+            t.grid(row=i // 3, column=i % 3, padx=(0, 8), pady=(0, 8))
+            bd = T.TILES.get(name, T.TILES["기타"])[1]
+            for w in [t] + t.winfo_children():
+                w.configure(cursor="hand2")
+                w.bind("<Button-1>", lambda e, nm=name: self.print_place(nm))
+                w.bind("<Enter>", lambda e, fr=t: fr.configure(highlightbackground=T.INK, highlightthickness=2))
+                w.bind("<Leave>", lambda e, fr=t, c=bd: fr.configure(highlightbackground=c, highlightthickness=1))
+        ttk.Label(self.tiles_fr, text="타일을 누르면 그 경로의 주문만 인쇄합니다.", style="PageHint.TLabel").grid(
+            row=(len(cnt) - 1) // 3 + 1, column=0, columnspan=3, sticky="w")
 
     def refresh_all(self):
         self.refresh_status()
@@ -762,20 +816,26 @@ class App(tk.Tk):
                 f"\n가장 늦은 결제: {str(orders[-1].get('payment_date') or '')[:16].replace('T', ' ')}" if orders else ""
         return messagebox.askyesno("인쇄 확인", f"{what} {len(orders)}건을 인쇄할까요?\n({self._breakdown(orders)}){extra}")
 
-    def print_now(self):
+    def print_now(self, split=None):
+        split = op.split_on() if split is None else split
+
         def got(orders):
             if not orders:
                 messagebox.showinfo("지금 출력", "새로 출력할 주문이 없습니다.")
                 self.load_board()
                 return
-            if not self._confirm_print(orders, "새 주문"):
+            what = "새 주문"
+            if split:
+                smart, rest = op.split_orders(orders)
+                what = f"새 주문 (스마트스토어 쪽 {len(smart)}건 먼저 → 구분 용지 → 나머지 {len(rest)}건)"
+            if not self._confirm_print(orders, what):
                 return
 
             def work(prog):
                 token = op.get_access_token(self.cfg)
                 with op.run_lock():
-                    op.log.info(f"[수동 출력] {len(orders)}건")
-                    return op.print_orders(self.cfg, token, orders, "수동", prog)
+                    op.log.info(f"[수동 출력] {len(orders)}건" + (" · 스마트스토어 나눠서" if split else ""))
+                    return op.print_orders(self.cfg, token, orders, "수동", prog, split=split)
 
             self.bg(work, lambda r: self._printed(len(orders), r), "주문서 준비 중...", progress=True)
         self.bg(lambda: op.new_orders(self.cfg, op.get_access_token(self.cfg)), got, "새 주문 확인 중...")

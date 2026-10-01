@@ -420,7 +420,22 @@ def end_sheet_pdf(info):
     return buf.getvalue()
 
 
-def build_orders_pdf(views, out_path, progress=None, end_info=None):
+def divider_pdf(info):
+    """'여기까지 스마트스토어' 구분 용지 (A4 가로 1장)"""
+    buf = io.BytesIO()
+    c = rl_canvas.Canvas(buf, pagesize=(SHEET_W, SHEET_H))
+    c.setFillColor(colors.HexColor("#E3F6D8")); c.rect(0, SHEET_H * 0.42, SHEET_W, SHEET_H * 0.34, stroke=0, fill=1)
+    c.setFillColor(colors.black)
+    c.setFont("KRB", 44); c.drawCentredString(SHEET_W / 2, SHEET_H * 0.6, "▲ 여기까지 스마트스토어")
+    c.setFont("KRB", 20); c.drawCentredString(SHEET_W / 2, SHEET_H * 0.49, f"스마트스토어 쪽 주문 {info['smart']}건")
+    c.setFont("KR", 18); c.drawCentredString(SHEET_W / 2, SHEET_H * 0.3, f"▼ 다음 장부터 나머지 주문 {info['rest']}건")
+    c.setFont("KR", 11); c.setFillColor(colors.HexColor("#666666"))
+    c.drawCentredString(SHEET_W / 2, SHEET_H * 0.2, "스마트스토어 주문과, 같은 고객의 다른 경로 주문이 앞쪽에 모여 있습니다.")
+    c.save()
+    return buf.getvalue()
+
+
+def build_orders_pdf(views, out_path, progress=None, end_info=None, divider=None):
     """주문서 여러 건 → A4 가로에 같은 주문서 2부씩 배치한 PDF. 주문마다 새 장에서 시작."""
     total = len(views)
     step = (lambda i: progress(i, total)) if progress else None
@@ -428,7 +443,11 @@ def build_orders_pdf(views, out_path, progress=None, end_info=None):
     data, _ = _single_copy_pdf(views, totals, step)           # 2회차: 쪽수 넣어서 완성
     src = PdfReader(io.BytesIO(data))
     w = PdfWriter()
-    for hp in src.pages:
+    cut = sum(totals.get(i, 1) for i in range(divider["index"])) if divider else -1   # 구분 용지 넣을 자리
+    for n, hp in enumerate(src.pages):
+        if n == cut:
+            for pg in PdfReader(io.BytesIO(divider_pdf(divider))).pages:
+                w.add_page(pg)
         sheet = PageObject.create_blank_page(width=SHEET_W, height=SHEET_H)
         sheet.merge_transformed_page(hp, Transformation().translate(0, 0))
         sheet.merge_transformed_page(hp, Transformation().translate(HALF_W, 0))
