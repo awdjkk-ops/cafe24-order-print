@@ -1,0 +1,171 @@
+# -*- coding: utf-8 -*-
+"""주문서 출력 관리 — 디자인(엔비즈워크 스타일). 색·글꼴·부품 모양은 모두 여기서 정합니다.
+새 화면을 만들 때도 이 파일의 스타일 이름만 쓰면 같은 모양이 됩니다. (자세한 규칙: 디자인규칙.md)"""
+import tkinter as tk
+import tkinter.font as tkfont
+from tkinter import ttk
+
+# ---------------------------------------------------------------- 색상표
+BG = "#F4F4F2"          # 페이지 바탕 (연한 회색)
+CARD = "#FFFFFF"        # 카드 (흰색)
+LINE = "#E5E5E2"        # 카드 테두리
+LINE_STRONG = "#D6D6D2" # 입력칸·보조 버튼 테두리
+INK = "#1F2328"         # 기본 글자 (검정)
+MUTED = "#8A8F98"       # 설명 글자 (회색)
+DIM = "#A3A7AE"         # 비활성 (이미 뽑은 주문 등)
+GREEN = "#1F9D6B"       # 강조 (주요 버튼, 켜짐, 오늘)
+GREEN_D = "#16825A"     # 강조 (눌렀을 때)
+GREEN_L = "#E7F5EE"     # 강조 연한 바탕 (선택된 줄, 상태 표시)
+RED = "#F2464B"         # 알림 띠 (확인 필요)
+BLUE = "#1565C0"        # 토요일 등
+ORANGE = "#D9480F"      # 주의 글자
+
+# 쇼핑몰(주문경로)별 파스텔 타일: (바탕, 테두리)
+TILES = {
+    "쿠팡": ("#FFE4CC", "#F5B784"), "네이버페이": ("#D7F3DE", "#8FD4A3"), "스마트스토어": ("#E3F6D8", "#A9DB8B"),
+    "PC": ("#FFF6C2", "#EAD66C"), "모바일": ("#DCEBFF", "#93BDF0"), "기타": ("#EDE3FF", "#C2A8F2"),
+}
+
+FONT = "맑은 고딕"
+
+
+def pick_font(root):
+    """윈도우는 맑은 고딕, 없으면 비슷한 한글 글꼴"""
+    global FONT
+    fams = set(tkfont.families(root))
+    for f in ("맑은 고딕", "Malgun Gothic", "NanumGothic", "Noto Sans CJK KR", "Noto Sans KR"):
+        if f in fams:
+            FONT = f
+            break
+    return FONT
+
+
+def f(size=10, bold=False):
+    return (FONT, size, "bold") if bold else (FONT, size)
+
+
+# ---------------------------------------------------------------- ttk 스타일
+def apply(root):
+    pick_font(root)
+    root.configure(background=BG)
+    root.option_add("*Font", f(10))
+    root.option_add("*TCombobox*Listbox.font", f(10))
+    st = ttk.Style(root)
+    st.theme_use("clam")
+    st.configure(".", background=CARD, foreground=INK, font=f(10), bordercolor=LINE, lightcolor=CARD,
+                 darkcolor=CARD, troughcolor="#EEEEEB", focuscolor=GREEN, selectbackground=GREEN_L,
+                 selectforeground=INK)
+
+    # 바탕: 카드 안은 흰색(기본), 페이지는 회색(Page.*)
+    st.configure("TFrame", background=CARD)
+    st.configure("Page.TFrame", background=BG)
+    st.configure("TLabel", background=CARD, foreground=INK)
+    st.configure("Page.TLabel", background=BG, foreground=INK)
+    st.configure("Hint.TLabel", background=CARD, foreground=MUTED, font=f(9))
+    st.configure("PageHint.TLabel", background=BG, foreground=MUTED, font=f(9))
+    st.configure("Title.TLabel", background=CARD, foreground=INK, font=f(12, True))
+    st.configure("PageTitle.TLabel", background=BG, foreground=INK, font=f(12, True))
+    st.configure("Big.TLabel", background=CARD, foreground=INK, font=f(13, True))
+
+    # 카드 (테두리 있는 흰 상자)
+    # 카드 제목은 카드 바깥 위쪽(회색 바탕)에, 카드는 흰 상자로
+    st.configure("TLabelframe", background=CARD, bordercolor=LINE, lightcolor=LINE, darkcolor=LINE,
+                 relief="solid", borderwidth=1, labeloutside=True, labelmargins=(0, 0, 0, 6))
+    st.configure("TLabelframe.Label", background=BG, foreground=INK, font=f(11, True))
+
+    # 버튼: 기본 = 흰 바탕 + 테두리 / Accent·Main = 초록 / Ghost = 초록 글자 + 초록 테두리
+    st.configure("TButton", background=CARD, foreground=INK, bordercolor=LINE_STRONG, lightcolor=CARD,
+                 darkcolor=CARD, font=f(10, True), padding=(12, 6), relief="solid", borderwidth=1)
+    st.map("TButton", background=[("disabled", "#F4F4F2"), ("pressed", "#EDEDEA"), ("active", "#F6F6F3")],
+           foreground=[("disabled", DIM)], bordercolor=[("focus", LINE_STRONG)])
+    for name, pad, size in (("Accent.TButton", (14, 6), 10), ("Main.TButton", (22, 10), 13)):
+        st.configure(name, background=GREEN, foreground="white", bordercolor=GREEN, lightcolor=GREEN,
+                     darkcolor=GREEN, font=f(size, True), padding=pad)
+        st.map(name, background=[("disabled", "#BFDCCF"), ("pressed", GREEN_D), ("active", GREEN_D)],
+               foreground=[("disabled", "white")], bordercolor=[("disabled", "#BFDCCF"), ("active", GREEN_D)],
+               lightcolor=[("active", GREEN_D)], darkcolor=[("active", GREEN_D)])
+    st.configure("Ghost.TButton", background=CARD, foreground=GREEN, bordercolor=GREEN, font=f(10, True), padding=(12, 6))
+    st.configure("Stop.TButton", background=CARD, foreground=RED, bordercolor=RED, font=f(10, True), padding=(12, 6))
+    st.map("Stop.TButton", background=[("active", "#FDEBEC")], foreground=[("disabled", DIM)],
+           bordercolor=[("disabled", LINE_STRONG)])
+    st.map("Ghost.TButton", background=[("active", GREEN_L)], foreground=[("disabled", DIM)])
+
+    # 체크·라디오
+    for base in ("TCheckbutton", "TRadiobutton"):
+        st.configure(base, background=CARD, foreground=INK, indicatorbackground=CARD, indicatorforeground=GREEN)
+        st.map(base, background=[("active", CARD)], indicatorbackground=[("selected", GREEN)],
+               indicatorforeground=[("selected", "white")])
+        st.configure("Page." + base, background=BG)
+        st.map("Page." + base, background=[("active", BG)])
+    st.configure("Big.TCheckbutton", font=f(12, True))
+    st.configure("Warn.TCheckbutton", background="#FFF8E6", font=f(10, True))
+    st.map("Warn.TCheckbutton", background=[("active", "#FFF8E6")], indicatorbackground=[("selected", GREEN)],
+           indicatorforeground=[("selected", "white")])
+    st.configure("PageBig.TCheckbutton", background=BG, font=f(12, True))
+    st.map("PageBig.TCheckbutton", background=[("active", BG)], indicatorbackground=[("selected", GREEN)],
+           indicatorforeground=[("selected", "white")])
+
+    # 입력칸
+    for w in ("TEntry", "TCombobox", "TSpinbox"):
+        st.configure(w, fieldbackground=CARD, background=CARD, bordercolor=LINE_STRONG, lightcolor=CARD,
+                     darkcolor=CARD, arrowcolor=MUTED, padding=4)
+        st.map(w, bordercolor=[("focus", GREEN)], lightcolor=[("focus", GREEN)],
+               fieldbackground=[("readonly", CARD), ("disabled", "#F4F4F2")], foreground=[("disabled", DIM)])
+
+    # 표
+    st.configure("Treeview", background=CARD, fieldbackground=CARD, foreground=INK, rowheight=28, borderwidth=0,
+                 font=f(10))
+    st.configure("Treeview.Heading", background="#F7F7F5", foreground=MUTED, font=f(10, True), relief="flat",
+                 borderwidth=0, padding=6)
+    st.map("Treeview", background=[("selected", GREEN_L)], foreground=[("selected", INK)])
+    st.map("Treeview.Heading", background=[("active", "#EFEFEC")])
+
+    # 안쪽 작은 탭(주문 현황/출력 기록 등)
+    st.configure("TNotebook", background=CARD, borderwidth=0, tabmargins=(0, 0, 0, 0))
+    st.configure("TNotebook.Tab", background="#F1F1EE", foreground=MUTED, padding=(14, 7), font=f(10, True),
+                 bordercolor=LINE, lightcolor=LINE)
+    st.map("TNotebook.Tab", background=[("selected", CARD)], foreground=[("selected", INK)])
+    # 바깥 큰 탭: 탭 머리는 숨기고 위쪽 메뉴 버튼으로 바꿈
+    st.configure("Main.TNotebook", background=BG, borderwidth=0, tabmargins=0)
+    st.layout("Main.TNotebook.Tab", [])
+
+    st.configure("TProgressbar", background=GREEN, troughcolor="#EEEEEB", bordercolor=LINE, lightcolor=GREEN,
+                 darkcolor=GREEN)
+    # 스크롤바: 양쪽 화살표는 두고, 가운데 막대는 줄무늬 없는 민자
+    for o in ("Vertical.TScrollbar", "Horizontal.TScrollbar", "TScrollbar"):
+        st.configure(o, gripcount=0, background="#DADAD6", troughcolor="#F1F1EE", bordercolor="#F1F1EE",
+                     lightcolor="#DADAD6", darkcolor="#DADAD6", arrowcolor=MUTED, relief="flat")
+        st.map(o, background=[("pressed", "#BDBDB8"), ("active", "#CACAC5")],
+               lightcolor=[("pressed", "#BDBDB8"), ("active", "#CACAC5")],
+               darkcolor=[("pressed", "#BDBDB8"), ("active", "#CACAC5")])
+    return st
+
+
+# ---------------------------------------------------------------- 부품 (tk)
+def text_box(t):
+    """tk.Text를 카드 안 글상자 모양으로"""
+    t.configure(background=CARD, foreground=INK, relief="flat", highlightthickness=1,
+                highlightbackground=LINE_STRONG, highlightcolor=GREEN, font=f(9), padx=6, pady=4)
+    return t
+
+
+def alert(parent, text):
+    """빨간 알림 띠"""
+    return tk.Label(parent, text=text, bg=RED, fg="white", font=f(10, True), anchor="w", padx=14, pady=8,
+                    justify="left")
+
+
+def pill(parent, text, on=False):
+    """상태 표시 알약 (켜짐=초록, 꺼짐=회색)"""
+    return tk.Label(parent, text=f" {text} ", bg=GREEN_L if on else "#EFEFEC", fg=GREEN_D if on else MUTED,
+                    font=f(10, True), padx=8, pady=4)
+
+
+def tile(parent, name, count, width=140, height=76):
+    """쇼핑몰별 파스텔 타일"""
+    bg, bd = TILES.get(name, TILES["기타"])
+    fr = tk.Frame(parent, bg=bg, highlightbackground=bd, highlightthickness=1, width=width, height=height)
+    fr.grid_propagate(False); fr.pack_propagate(False)
+    tk.Label(fr, text=name, bg=bg, fg=INK, font=f(10, True)).place(relx=0.5, rely=0.32, anchor="center")
+    tk.Label(fr, text=f"{count}건", bg=bg, fg=INK, font=f(16, True)).place(relx=0.5, rely=0.68, anchor="center")
+    return fr

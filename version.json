@@ -1,0 +1,31 @@
+{
+  "version": "1.0.0",
+  "notes": "깃허브 자동 업데이트 기능이 들어간 첫 버전",
+  "packages": [],
+  "files": [
+    "auto_print.bat",
+    "boot_check.bat",
+    "courier.py",
+    "create_shortcuts.ps1",
+    "first_auth.bat",
+    "gui_admin.py",
+    "gui_courier.py",
+    "gui_labels.py",
+    "gui_lists.py",
+    "gui_schedule.py",
+    "gui_scroll.py",
+    "install.bat",
+    "labels.py",
+    "manager.bat",
+    "notify.py",
+    "order_manager.py",
+    "order_print.py",
+    "order_sheet.py",
+    "print_schedule.py",
+    "theme.py",
+    "updater.py",
+    "디자인규칙.md",
+    "사용설명서.md",
+    "업데이트방법.md"
+  ]
+}
