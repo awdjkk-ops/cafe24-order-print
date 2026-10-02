@@ -27,6 +27,43 @@ TILES = {
 }
 
 FONT = "맑은 고딕"
+RADIUS = 9              # 모서리 둥글기 (px)
+_IMGS = []              # 그림이 지워지지 않게 붙잡아 둠
+
+
+def _rr(w, h, r, fill, outline=None, bw=1, ss=4):
+    """둥근 사각형 그림 (모서리 바깥은 투명). 4배로 그린 뒤 줄여서 매끄럽게."""
+    from PIL import Image, ImageDraw, ImageTk
+    W, H = w * ss, h * ss
+    im = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    if outline:
+        d.rounded_rectangle([0, 0, W - 1, H - 1], r * ss, fill=outline)
+        k = bw * ss
+        d.rounded_rectangle([k, k, W - 1 - k, H - 1 - k], max(1, r - bw) * ss, fill=fill)
+    else:
+        d.rounded_rectangle([0, 0, W - 1, H - 1], r * ss, fill=fill)
+    img = ImageTk.PhotoImage(im.resize((w, h), Image.LANCZOS))
+    _IMGS.append(img)
+    return img
+
+
+def _round_button(st, name, fill, line, hover, press, dis_fill, dis_line, r=RADIUS):
+    el = name.replace(".", "_") + "_rb"
+    n, h, p, d = (_rr(48, 34, r, c, b) for c, b in ((fill, line), (hover, line), (press, line), (dis_fill, dis_line)))
+    st.element_create(el, "image", n, ("disabled", d), ("pressed", p), ("active", h), border=r + 2,
+                      padding=(2, 1), sticky="nsew")
+    st.layout(name, [(el, {"sticky": "nsew", "children": [
+        ("Button.padding", {"sticky": "nsew", "children": [("Button.label", {"sticky": "nsew"})]})]})])
+
+
+def _round_field(st, name, inner):
+    el = name.replace(".", "_") + "_rf"
+    n = _rr(48, 32, 7, CARD, LINE_STRONG)
+    fo = _rr(48, 32, 7, CARD, GREEN, bw=2)
+    di = _rr(48, 32, 7, "#F4F4F2", LINE)
+    st.element_create(el, "image", n, ("disabled", di), ("focus", fo), border=8, padding=(2, 1), sticky="nsew")
+    st.layout(name, [(el, {"sticky": "nsew", "children": inner})])
 
 
 def pick_font(root):
@@ -132,6 +169,38 @@ def apply(root):
     st.configure("Main.TNotebook", background=BG, borderwidth=0, tabmargins=0)
     st.layout("Main.TNotebook.Tab", [])
 
+    # ---- 둥근 모서리 (웹 도구처럼). 바탕이 회색인 곳은 Page.* 스타일
+    for prefix, under in (("", CARD), ("Page.", BG)):
+        st.configure(prefix + "TButton", background=under)
+        _round_button(st, prefix + "TButton", CARD, LINE_STRONG, "#F6F6F3", "#EDEDEA", "#F4F4F2", LINE)
+        st.configure(prefix + "Accent.TButton", background=under, foreground="white", font=f(10, True), padding=(14, 6))
+        _round_button(st, prefix + "Accent.TButton", GREEN, GREEN, GREEN_D, GREEN_D, "#BFDCCF", "#BFDCCF")
+        st.configure(prefix + "Main.TButton", background=under, foreground="white", font=f(13, True), padding=(22, 10))
+        _round_button(st, prefix + "Main.TButton", GREEN, GREEN, GREEN_D, GREEN_D, "#BFDCCF", "#BFDCCF", r=11)
+        st.configure(prefix + "Ghost.TButton", background=under, foreground=GREEN, font=f(10, True), padding=(12, 6))
+        _round_button(st, prefix + "Ghost.TButton", CARD, GREEN, GREEN_L, "#D5EEE2", "#F4F4F2", LINE)
+        st.configure(prefix + "Stop.TButton", background=under, foreground=RED, font=f(10, True), padding=(12, 6))
+        _round_button(st, prefix + "Stop.TButton", CARD, RED, "#FDEBEC", "#FAD7D9", "#F4F4F2", LINE)
+    for name in ("Accent.TButton", "Main.TButton", "Page.Accent.TButton", "Page.Main.TButton"):
+        st.map(name, foreground=[("disabled", "white")], background=[])
+    for name in ("TButton", "Page.TButton", "Ghost.TButton", "Page.Ghost.TButton", "Stop.TButton", "Page.Stop.TButton"):
+        st.map(name, background=[], foreground=[("disabled", DIM)])
+    # 카드: 바깥(모서리)은 페이지 회색, 안은 흰색
+    card = _rr(64, 64, RADIUS + 2, CARD, LINE)
+    st.element_create("Card_border", "image", card, border=RADIUS + 4, padding=2, sticky="nsew")
+    st.layout("TLabelframe", [("Card_border", {"sticky": "nsew"})])
+    st.configure("TLabelframe", background=BG)
+    # 입력칸
+    _round_field(st, "TEntry", [("Entry.padding", {"sticky": "nsew", "children": [("Entry.textarea", {"sticky": "nsew"})]})])
+    _round_field(st, "TCombobox", [("Combobox.downarrow", {"side": "right", "sticky": "ns"}),
+                                   ("Combobox.padding", {"expand": "1", "sticky": "nsew",
+                                                         "children": [("Combobox.textarea", {"sticky": "nsew"})]})])
+    _round_field(st, "TSpinbox", [("Spinbox.uparrow", {"side": "top", "sticky": "e"}),
+                                  ("Spinbox.downarrow", {"side": "bottom", "sticky": "e"}),
+                                  ("Spinbox.padding", {"sticky": "nsew", "children": [("Spinbox.textarea", {"sticky": "nsew"})]})])
+    for w in ("TEntry", "TCombobox", "TSpinbox"):
+        st.configure(w, padding=(7, 3), background=CARD)
+
     st.configure("TProgressbar", background=GREEN, troughcolor="#EEEEEB", bordercolor=LINE, lightcolor=GREEN,
                  darkcolor=GREEN)
     # 스크롤바: 양쪽 화살표는 두고, 가운데 막대는 줄무늬 없는 민자
@@ -145,6 +214,86 @@ def apply(root):
 
 
 # ---------------------------------------------------------------- 부품 (tk)
+def _round_poly(cv, x1, y1, x2, y2, r, **kw):
+    pts = [x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y2 - r, x2, y2, x2 - r, y2, x1 + r, y2,
+           x1, y2, x1, y2 - r, x1, y1 + r, x1, y1]
+    return cv.create_polygon(pts, smooth=True, **kw)
+
+
+class Pill(tk.Canvas):
+    """둥근 알약 모양 글자 (상태 표시, 메뉴 버튼). configure(text=, bg=채우기색, fg=글자색, outline=테두리색)"""
+
+    def __init__(self, parent, text="", bg=GREEN_L, fg=GREEN_D, outline=None, font=None, padx=12, pady=6,
+                 under=CARD, radius=None):
+        super().__init__(parent, highlightthickness=0, bd=0, background=under)
+        self._o = {"text": text, "bg": bg, "fg": fg, "outline": outline}
+        self._font, self._padx, self._pady, self._r = font or f(10, True), padx, pady, radius
+        self._draw()
+
+    def _draw(self):
+        import tkinter.font as tkf
+        fnt = tkf.Font(font=self._font)
+        w = fnt.measure(self._o["text"]) + self._padx * 2
+        h = fnt.metrics("linespace") + self._pady * 2
+        tk.Canvas.configure(self, width=w + 2, height=h + 2)
+        self.delete("all")
+        r = self._r if self._r is not None else min(RADIUS, h // 2)
+        _round_poly(self, 1, 1, w, h, r, fill=self._o["bg"], outline=self._o["outline"] or self._o["bg"])
+        self.create_text(w / 2 + 1, h / 2 + 1, text=self._o["text"], fill=self._o["fg"], font=self._font)
+
+    def configure(self, cnf=None, **kw):
+        if "highlightbackground" in kw:
+            kw["outline"] = kw.pop("highlightbackground")
+        mine = {k: kw.pop(k) for k in ("text", "bg", "fg", "outline") if k in kw}
+        if mine:
+            self._o.update(mine)
+            self._draw()
+        if kw or cnf:
+            return tk.Canvas.configure(self, cnf, **kw)
+    config = configure
+
+    def cget(self, key):
+        return self._o[key] if key in self._o else tk.Canvas.cget(self, key)
+
+
+class RoundBox(tk.Canvas):
+    """폭에 맞춰 늘어나는 둥근 상자 (알림 띠 등). 글자는 자동 줄바꿈."""
+
+    def __init__(self, parent, text="", fill=RED, fg="white", outline=None, under=BG, font=None, pad=(14, 9)):
+        super().__init__(parent, highlightthickness=0, bd=0, background=under, height=36)
+        self._t, self._fill, self._fg, self._ol, self._font, self._pad = text, fill, fg, outline, font or f(10, True), pad
+        self.bind("<Configure>", lambda e: self._draw())
+
+    def _draw(self):
+        w = max(self.winfo_width(), 50)
+        self.delete("all")
+        tid = self.create_text(self._pad[0], self._pad[1], text=self._t, fill=self._fg, font=self._font, anchor="nw",
+                               width=w - self._pad[0] * 2)
+        x1, y1, x2, y2 = self.bbox(tid)
+        h = y2 + self._pad[1]
+        if int(self.cget("height")) != h:
+            tk.Canvas.configure(self, height=h)
+        bg = _round_poly(self, 0, 0, w - 1, h - 1, RADIUS, fill=self._fill, outline=self._ol or self._fill)
+        self.tag_lower(bg)
+
+
+class Tile(tk.Canvas):
+    """쇼핑몰별 파스텔 타일 (둥근 모서리, 마우스를 올리면 진한 테두리)"""
+
+    def __init__(self, parent, name, count, width=140, height=76, under=BG):
+        super().__init__(parent, width=width, height=height, highlightthickness=0, bd=0, background=under)
+        self.name, self.count, self.w, self.h = name, count, width, height
+        self.bg_c, self.bd_c = TILES.get(name, TILES["기타"])
+        self.hover(False)
+
+    def hover(self, on):
+        self.delete("all")
+        _round_poly(self, 1, 1, self.w - 2, self.h - 2, RADIUS + 2, fill=self.bg_c,
+                    outline=INK if on else self.bd_c, width=2 if on else 1)
+        self.create_text(self.w / 2, self.h * 0.32, text=self.name, fill=INK, font=f(10, True))
+        self.create_text(self.w / 2, self.h * 0.68, text=f"{self.count}건", fill=INK, font=f(16, True))
+
+
 def text_box(t):
     """tk.Text를 카드 안 글상자 모양으로"""
     t.configure(background=CARD, foreground=INK, relief="flat", highlightthickness=1,
@@ -153,22 +302,15 @@ def text_box(t):
 
 
 def alert(parent, text):
-    """빨간 알림 띠"""
-    return tk.Label(parent, text=text, bg=RED, fg="white", font=f(10, True), anchor="w", padx=14, pady=8,
-                    justify="left")
+    """빨간 알림 띠 (둥근 모서리)"""
+    return RoundBox(parent, text=text, fill=RED, fg="white", under=BG)
 
 
-def pill(parent, text, on=False):
+def pill(parent, text, on=False, under=CARD):
     """상태 표시 알약 (켜짐=초록, 꺼짐=회색)"""
-    return tk.Label(parent, text=f" {text} ", bg=GREEN_L if on else "#EFEFEC", fg=GREEN_D if on else MUTED,
-                    font=f(10, True), padx=8, pady=4)
+    return Pill(parent, text=text, bg=GREEN_L if on else "#EFEFEC", fg=GREEN_D if on else MUTED, under=under)
 
 
 def tile(parent, name, count, width=140, height=76):
     """쇼핑몰별 파스텔 타일"""
-    bg, bd = TILES.get(name, TILES["기타"])
-    fr = tk.Frame(parent, bg=bg, highlightbackground=bd, highlightthickness=1, width=width, height=height)
-    fr.grid_propagate(False); fr.pack_propagate(False)
-    tk.Label(fr, text=name, bg=bg, fg=INK, font=f(10, True)).place(relx=0.5, rely=0.32, anchor="center")
-    tk.Label(fr, text=f"{count}건", bg=bg, fg=INK, font=f(16, True)).place(relx=0.5, rely=0.68, anchor="center")
-    return fr
+    return Tile(parent, name, count, width, height)

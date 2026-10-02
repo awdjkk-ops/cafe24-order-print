@@ -565,7 +565,7 @@ def courier_candidates():
     done = read_json(COURIER_DONE_FILE, {})
     out, seen = [], set()
     for b in reversed(load_history()):
-        if b["kind"] not in PRINT_KINDS:
+        if b["kind"] not in PRINT_KINDS + (COURIER_ADD_KIND,):
             continue
         for o in b["orders"]:
             if o["order_id"] not in seen and o["order_id"] not in done:
@@ -631,6 +631,37 @@ def rows_for_orders(cfg, token, ids, progress=None, split_n=0):
     keep = set(ids[:split_n])
     smart_n = sum(1 for o in orders if o["order_id"] in keep)
     return _rows_with_place(orders, smart_n)
+
+
+COURIER_ADD_KIND = "택배 대기 추가"     # 인쇄 없이 택배·라벨에만 넣은 주문 (카페24에서 직접 뽑은 경우 등)
+
+
+def add_to_courier(orders, mark_printed=True):
+    """주문 현황에서 고른 주문을 택배 대기에 넣음 (인쇄는 안 함).
+    이미 택배 파일에 들어간 주문과 이미 대기 중인 주문은 뺌. 돌려줌: (넣은 건수, 빠진 이유별 주문번호)"""
+    done = read_json(COURIER_DONE_FILE, {})
+    waiting = {o["order_id"] for o, _ in courier_candidates()}
+    skipped = {"이미 택배 파일에 들어감": [], "이미 택배 대기 중": []}
+    targets = []
+    for o in orders:
+        oid = o["order_id"]
+        if oid in done:
+            skipped["이미 택배 파일에 들어감"].append(oid)
+        elif oid in waiting:
+            skipped["이미 택배 대기 중"].append(oid)
+        else:
+            targets.append(o)
+    if targets:
+        add_history(COURIER_ADD_KIND, targets, "", 0)
+        if mark_printed:
+            printed = read_json(PRINTED_FILE, {})
+            stamp = "택배추가 " + dt.datetime.now().isoformat(timespec="seconds")
+            for o in targets:
+                printed.setdefault(o["order_id"], stamp)
+            write_json(PRINTED_FILE, printed)
+    log.info(f"[택배 대기 추가] {len(targets)}건 (뽑음 표시: {'예' if mark_printed else '아니요'}) · "
+             + ", ".join(f"{k} {len(v)}" for k, v in skipped.items() if v))
+    return len(targets), skipped
 
 
 def load_courier_history():

@@ -75,11 +75,11 @@ class LabelTab(ttk.Frame):
         nav = ttk.Frame(right, style="Page.TFrame"); nav.grid(row=0, column=0, sticky="we")
         self.nav_btns = []
         for text, cmd in (("◀◀ 맨 앞", lambda: self.go(first=True)), ("◀ 이전", lambda: self.go(-1))):
-            b = ttk.Button(nav, text=text, command=cmd); b.pack(side="left", padx=(0, 4)); self.nav_btns.append(b)
+            b = ttk.Button(nav, text=text, style="Page.TButton", command=cmd); b.pack(side="left", padx=(0, 4)); self.nav_btns.append(b)
         self.page_lb = ttk.Label(nav, text="페이지 - / -", style="PageTitle.TLabel", width=14, anchor="center")
         self.page_lb.pack(side="left", padx=8)
         for text, cmd in (("다음 ▶", lambda: self.go(1)), ("맨 뒤 ▶▶", lambda: self.go(last=True))):
-            b = ttk.Button(nav, text=text, command=cmd); b.pack(side="left", padx=(0, 4)); self.nav_btns.append(b)
+            b = ttk.Button(nav, text=text, style="Page.TButton", command=cmd); b.pack(side="left", padx=(0, 4)); self.nav_btns.append(b)
         width = 5 * (NUM_W + CELL_W) + 4 * GAP + 20
         self.cv = tk.Canvas(right, width=width, height=29 * CELL_H + 16, background=T.CARD,
                             highlightthickness=1, highlightbackground=T.LINE, cursor="hand2")
@@ -89,7 +89,7 @@ class LabelTab(ttk.Frame):
         self.cv.bind("<ButtonRelease-1>", self.release)
         bot = ttk.Frame(right, style="Page.TFrame"); bot.grid(row=2, column=0, sticky="we")
         self.info_lb = ttk.Label(bot, text="", style="Page.TLabel"); self.info_lb.pack(side="left")
-        ttk.Button(bot, text="이 페이지 초기화", command=self.reset_page).pack(side="right")
+        ttk.Button(bot, text="이 페이지 초기화", style="Page.TButton", command=self.reset_page).pack(side="right")
         self.buttons = [self.b_print, self.b_xlsx]
         self.draw()
 

@@ -43,8 +43,8 @@ class App(tk.Tk):
         tk.Label(top, text="주문서 출력 관리", bg=T.CARD, fg=T.INK, font=T.f(17, True)).pack(side="left", padx=(22, 8), pady=10)
         tk.Label(top, text=f"v{updater.local_info().get('version', '?')}", bg=T.CARD, fg=T.MUTED,
                  font=T.f(9)).pack(side="left", pady=(16, 10))
-        self.update_pill = tk.Label(top, text="", bg="#E8F0FE", fg="#1A56C4", font=T.f(10, True), padx=10, pady=4,
-                                    cursor="hand2")
+        self.update_pill = T.Pill(top, text=" ", bg="#E8F0FE", fg="#1A56C4")
+        self.update_pill.configure(cursor="hand2")
         self.update_pill.bind("<Button-1>", lambda e: self.do_update())
         self.pending_update = None
         self.update_state = "checking"
@@ -61,12 +61,15 @@ class App(tk.Tk):
         self.nav_btns = {}
 
         # 작업 중 표시 띠 (모든 탭 공통, 작업 중일 때만 보임)
-        self.band = tk.Frame(self, bg=T.GREEN_L, highlightbackground="#BFE3D2", highlightthickness=1)
+        self.band = tk.Canvas(self, height=42, background=T.BG, highlightthickness=0, bd=0)
+        self.band_fill, self.band_line = T.GREEN_L, "#BFE3D2"
         self.band_dot = tk.Label(self.band, text="●", bg=T.GREEN_L, fg=T.GREEN, font=T.f(11, True))
-        self.band_dot.pack(side="left", padx=(14, 6), pady=8)
         self.prog_lb = tk.Label(self.band, text="", bg=T.GREEN_L, fg=T.GREEN_D, font=T.f(10, True), anchor="w")
-        self.prog_lb.pack(side="left", pady=8)
         self.pbar = ttk.Progressbar(self.band, length=320)
+        self._w_dot = self.band.create_window(16, 21, window=self.band_dot, anchor="w")
+        self._w_lb = self.band.create_window(36, 21, window=self.prog_lb, anchor="w")
+        self._w_bar = self.band.create_window(0, 21, window=self.pbar, anchor="e", state="hidden")
+        self.band.bind("<Configure>", lambda e: self._band_draw())
         self._busy_msg = ""
         self._flash_job = None
 
@@ -79,8 +82,8 @@ class App(tk.Tk):
             area, tab = scrolled(nb, build)
             nb.add(area, text=text)
             self.pages[key] = area
-            b = tk.Label(self.nav, text=text, font=T.f(10, True), padx=16, pady=8, cursor="hand2",
-                         highlightthickness=1)
+            b = T.Pill(self.nav, text=text, bg=T.CARD, fg=T.INK, outline=T.LINE, under=T.BG, padx=16, pady=8)
+            b.configure(cursor="hand2")
             b.pack(side="left", padx=(0, 8))
             b.bind("<Button-1>", lambda e, k=key: self.show_tab(k))
             self.nav_btns[key] = b
@@ -248,19 +251,24 @@ class App(tk.Tk):
             self.pbar.stop(); self.pbar.configure(mode="determinate", value=0)
             self._band_hide()
 
+    def _band_draw(self):
+        w = max(self.band.winfo_width(), 100)
+        self.band.delete("frame")
+        T._round_poly(self.band, 1, 1, w - 2, 40, T.RADIUS, fill=self.band_fill, outline=self.band_line, tags="frame")
+        self.band.tag_lower("frame")
+        self.band.coords(self._w_bar, w - 16, 21)
+
     def _band_show(self, text, bg, fg, progress=False):
         if self._flash_job:
             self.after_cancel(self._flash_job); self._flash_job = None
-        for w in (self.band, self.band_dot, self.prog_lb):
+        self.band_fill, self.band_line = bg, ("#BFE3D2" if bg == T.GREEN_L else T.LINE)
+        for w in (self.band_dot, self.prog_lb):
             w.configure(bg=bg)
-        self.band.configure(highlightbackground="#BFE3D2" if bg == T.GREEN_L else T.LINE)
         self.prog_lb.configure(text=text, fg=fg); self.band_dot.configure(fg=T.GREEN if progress else fg)
-        if progress:
-            self.pbar.pack(side="right", padx=14)
-        else:
-            self.pbar.pack_forget()
+        self.band.itemconfigure(self._w_bar, state="normal" if progress else "hidden")
         if not self.band.winfo_ismapped():
             self.band.pack(fill="x", padx=18, pady=(8, 0), before=self.nb)
+        self._band_draw()
 
     def _band_hide(self):
         self.band.pack_forget()
@@ -302,7 +310,7 @@ class App(tk.Tk):
         head = ttk.Frame(nf, style="Page.TFrame"); head.pack(fill="x")
         self.new_title = ttk.Label(head, text="지금 새 주문  확인 중...", style="PageTitle.TLabel")
         self.new_title.pack(side="left")
-        b = ttk.Button(head, text="새로 고침", command=self.refresh_all); b.pack(side="right")
+        b = ttk.Button(head, text="새로 고침", style="Page.TButton", command=self.refresh_all); b.pack(side="right")
         self.tiles_fr = ttk.Frame(nf, style="Page.TFrame"); self.tiles_fr.pack(fill="x", pady=(8, 0))
 
         # 출력하기
@@ -378,6 +386,8 @@ class App(tk.Tk):
         b8 = ttk.Button(btns, text="이 고객부터 출력", command=self.print_from); b8.grid(row=0, column=1, sticky="w", padx=6)
         b9 = ttk.Button(btns, text="선택한 주문만 출력", command=self.print_selected); b9.grid(row=0, column=2, sticky="w")
         b12 = ttk.Button(btns, text="안 뽑은 상태로", command=self.revert_selected); b12.grid(row=0, column=3, sticky="w", padx=(6, 0))
+        b14 = ttk.Button(btns, text="택배·라벨에 넣기", style="Ghost.TButton", command=self.add_courier_selected)
+        b14.grid(row=1, column=0, sticky="w", pady=(6, 0))
         b10 = ttk.Button(btns, text="되돌리기", command=self.undo_line); b10.grid(row=0, column=4, sticky="e", padx=(12, 0))
         # 오른쪽 클릭 메뉴
         self.board_menu = tk.Menu(self, tearoff=0, font=T.f(10))
@@ -386,6 +396,7 @@ class App(tk.Tk):
         self.board_menu.add_command(label="선택한 주문만 출력", command=self.print_selected)
         self.board_menu.add_separator()
         self.board_menu.add_command(label="안 뽑은 상태로 되돌리기", command=self.revert_selected)
+        self.board_menu.add_command(label="택배·라벨에 넣기", command=self.add_courier_selected)
 
         def popup(e):
             row = self.board.identify_row(e.y)
@@ -400,6 +411,8 @@ class App(tk.Tk):
                  "· 선택한 주문만 출력: 고른 주문들만 인쇄합니다 (Ctrl·Shift+클릭으로 여러 개).\n"
                  "· 안 뽑은 상태로: 이미 뽑은(회색) 주문을 다음 출력에 다시 나오게 합니다. 택배 파일에 다시 넣을지는 확인 창에서 고릅니다.\n"
                  "· 되돌리기: 바로 전의 선 옮기기·안 뽑은 상태로 되돌리기를 취소합니다. (주문 위에서 오른쪽 클릭하면 메뉴가 나와요)\n"
+                 "· 선택한 주문까지 뽑은 것으로: 표시만 하고 택배 파일·라벨·출력주문 엑셀에는 들어가지 않습니다 (카페24에서 직접 뽑은 경우).\n"
+                 "· 택배·라벨에 넣기: 고른 주문을 인쇄 없이 택배 대기에 넣습니다. 택배 탭에서 택배 파일을 만들면 라벨도 함께 준비됩니다.\n"
                  "· 주황색 '늦게 들어옴'은 선보다 앞 시각이지만 나중에 카페24에 들어온 마켓 주문으로, 다음 출력 때 나옵니다.",
              row=4, column=0, sticky="w", pady=(6, 0), wrap=640)
 
@@ -444,7 +457,7 @@ class App(tk.Tk):
         b6.grid(row=3, column=1, sticky="e", pady=(6, 0))
         hint(of, "고른 주문만 카페24에서 새로 불러와 인쇄합니다(여러 개: Ctrl+클릭). 오래된 주문도 가능합니다.",
              row=4, column=0, columnspan=2, sticky="w", wrap=640)
-        self.action_buttons = [b, b1, b2, b3, b4, b5, b6, b7, b8, b9, b10, bs, br, b11, b12, b13]
+        self.action_buttons = [b, b1, b2, b3, b4, b5, b6, b7, b8, b9, b10, bs, br, b11, b12, b13, b14]
 
     # ---------------------------------------------------------------- 상태
     def _set_status(self, key, level, text):
@@ -544,12 +557,10 @@ class App(tk.Tk):
         for i, (name, n) in enumerate(cnt.most_common()):
             t = T.tile(self.tiles_fr, name, n, width=138)
             t.grid(row=i // 3, column=i % 3, padx=(0, 8), pady=(0, 8))
-            bd = T.TILES.get(name, T.TILES["기타"])[1]
-            for w in [t] + t.winfo_children():
-                w.configure(cursor="hand2")
-                w.bind("<Button-1>", lambda e, nm=name: self.print_place(nm))
-                w.bind("<Enter>", lambda e, fr=t: fr.configure(highlightbackground=T.INK, highlightthickness=2))
-                w.bind("<Leave>", lambda e, fr=t, c=bd: fr.configure(highlightbackground=c, highlightthickness=1))
+            t.configure(cursor="hand2")
+            t.bind("<Button-1>", lambda e, nm=name: self.print_place(nm))
+            t.bind("<Enter>", lambda e, tt=t: tt.hover(True))
+            t.bind("<Leave>", lambda e, tt=t: tt.hover(False))
         ttk.Label(self.tiles_fr, text="타일을 누르면 그 경로의 주문만 인쇄합니다.", style="PageHint.TLabel").grid(
             row=(len(cnt) - 1) // 3 + 1, column=0, columnspan=3, sticky="w")
 
@@ -684,6 +695,25 @@ class App(tk.Tk):
             return
         op.set_printed_line(above, below)
         self.refresh_status(); self.load_board()
+
+    def add_courier_selected(self):
+        sel = self._board_selected()
+        rows = [self.board_rows[i] for i in sel]
+        if not rows:
+            messagebox.showinfo("택배·라벨에 넣기", "주문 현황에서 넣을 주문을 골라 주세요. (Ctrl·Shift+클릭으로 여러 개)")
+            return
+        orders = [o for o, _, _ in rows]
+        not_printed = [o["order_id"] for o, done, _ in rows if not done]
+        done_c = op.read_json(op.COURIER_DONE_FILE, {})
+        in_courier = [o["order_id"] for o in orders if o["order_id"] in done_c]
+        AddCourierDialog(self, orders, not_printed, in_courier, lambda mark: self._do_add_courier(orders, mark))
+
+    def _do_add_courier(self, orders, mark):
+        n, skipped = op.add_to_courier(orders, mark)
+        msg = f"{n}건을 택배 대기에 넣었습니다."
+        extra = [f"{k} {len(v)}건은 뺐습니다" for k, v in skipped.items() if v]
+        self.flash(msg + (" (" + ", ".join(extra) + ")" if extra else ""))
+        self.load_board(); self.courier_tab.refresh(); self.show_history()
 
     def revert_selected(self):
         sel = self._board_selected()
@@ -856,6 +886,10 @@ class App(tk.Tk):
             return
         b = op.load_history()[int(sel[0])]
         when = b["time"][5:16].replace("T", " ")
+        if b["kind"] in (op.COURIER_ADD_KIND, "기준 조정", "자동(중지)"):
+            messagebox.showinfo("다시 뽑기", f"'{b['kind']}' 기록은 이 프로그램이 인쇄한 묶음이 아니라 다시 뽑을 수 없습니다.\n"
+                                         "필요한 주문은 주문 찾기 탭에서 골라 [선택한 주문 다시 뽑기]를 쓰세요.")
+            return
         if not messagebox.askyesno("다시 뽑기", f"{when} {b['kind']} 출력 {b['count']}건({b.get('pages', '?')}장)을 다시 인쇄할까요?"):
             return
         if Path(b["pdf"]).exists():
@@ -920,6 +954,52 @@ class App(tk.Tk):
                 rows.append((br, mark))
             self._fill_orders(rows, f"카페24에서 '{text}' 검색 결과 {len(rows)}건 (최근 3개월)")
         self.bg(lambda: op.search_cafe24(self.cfg, op.get_access_token(self.cfg), text), done, "카페24에서 찾는 중...")
+
+
+class AddCourierDialog(tk.Toplevel):
+    """택배·라벨에 넣기 확인 창"""
+
+    def __init__(self, app, orders, not_printed, in_courier, on_ok):
+        super().__init__(app)
+        self.title("택배·라벨에 넣기")
+        self.configure(background=T.CARD)
+        self.resizable(False, False)
+        self.transient(app)
+        self.on_ok = on_ok
+        n_ok = len(orders) - len(in_courier)
+        f = ttk.Frame(self, padding=18); f.pack(fill="both")
+        ttk.Label(f, text=f"선택한 주문 {len(orders)}건을 택배 대기에 넣습니다", style="Title.TLabel").pack(anchor="w")
+        ttk.Label(f, text="인쇄는 하지 않습니다. 택배 탭에서 택배 파일을 만들면 라벨도 같은 주문으로 준비됩니다.",
+                  foreground=T.MUTED, wraplength=400, justify="left").pack(anchor="w", pady=(6, 0))
+        self.mark = tk.BooleanVar(value=True)
+        if not_printed:
+            box = tk.Frame(f, bg="#F1FAEC", highlightbackground="#B7E4B0", highlightthickness=1); box.pack(fill="x", pady=(12, 0))
+            tk.Label(box, text=f"이 중 {len(not_printed)}건은 아직 안 뽑은 주문입니다.", bg="#F1FAEC", fg=T.INK,
+                     font=T.f(10, True), anchor="w").pack(fill="x", padx=10, pady=(8, 2))
+            ttk.Checkbutton(box, text="뽑은 것으로도 표시 (다음 출력에 다시 안 나오게)", variable=self.mark,
+                            style="Split.TCheckbutton").pack(anchor="w", padx=8)
+            tk.Label(box, text="카페24에서 직접 뽑은 주문이면 그대로 두세요. 주문서를 나중에 이 프로그램으로 뽑을 거라면 체크를 끄세요.",
+                     bg="#F1FAEC", fg=T.MUTED, font=T.f(9), justify="left", anchor="w", wraplength=380).pack(fill="x", padx=10, pady=(2, 8))
+        if in_courier:
+            box = tk.Frame(f, bg="#FFF8E6", highlightbackground="#F2D7A0", highlightthickness=1); box.pack(fill="x", pady=(10, 0))
+            tk.Label(box, text=f"이 중 {len(in_courier)}건은 이미 택배 파일에 들어가서 빼고 넣습니다 (송장 중복 방지).\n"
+                               + ", ".join(in_courier[:4]) + (" …" if len(in_courier) > 4 else ""),
+                     bg="#FFF8E6", fg=T.INK, font=T.f(9), justify="left", anchor="w").pack(fill="x", padx=10, pady=8)
+        bf = ttk.Frame(f); bf.pack(fill="x", pady=(16, 0))
+        okb = ttk.Button(bf, text=f"{n_ok}건 넣기", style="Accent.TButton", command=self.ok); okb.pack(side="right")
+        if n_ok == 0:
+            okb.state(["disabled"])
+        ttk.Button(bf, text="취소", command=self.destroy).pack(side="right", padx=6)
+        self.update_idletasks()
+        x = app.winfo_rootx() + (app.winfo_width() - self.winfo_width()) // 2
+        y = app.winfo_rooty() + (app.winfo_height() - self.winfo_height()) // 3
+        self.geometry(f"+{max(0, x)}+{max(0, y)}")
+        self.grab_set()
+
+    def ok(self):
+        mark = self.mark.get()
+        self.destroy()
+        self.on_ok(mark)
 
 
 class RevertDialog(tk.Toplevel):

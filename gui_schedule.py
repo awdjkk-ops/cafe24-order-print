@@ -116,8 +116,8 @@ class ScheduleTab(ttk.Frame):
         # 저장
         bf = ttk.Frame(left, style="Page.TFrame"); bf.grid(row=9, column=0, sticky="we", pady=(10, 0))
         self.dirty_lb = ttk.Label(bf, text="", foreground=T.ORANGE, style="Page.TLabel"); self.dirty_lb.pack(side="left")
-        ttk.Button(bf, text="저장", command=self.save, style="Accent.TButton").pack(side="right")
-        ttk.Button(bf, text="되돌리기", command=self.revert).pack(side="right", padx=6)
+        ttk.Button(bf, text="저장", command=self.save, style="Page.Accent.TButton").pack(side="right")
+        ttk.Button(bf, text="되돌리기", style="Page.TButton", command=self.revert).pack(side="right", padx=6)
 
         # 오른쪽: 2주 목록 + 달력
         vf = ttk.LabelFrame(right, text=" 앞으로 2주 자동 출력 일정 ", padding=8)
