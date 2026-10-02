@@ -7,6 +7,12 @@ import time
 
 import requests
 
+from netfix import prefer_ipv4
+
+prefer_ipv4()
+_SESSION = requests.Session()          # 한 번 연결한 통로를 다시 씀 (구글 연결 시간 절약)
+LAST_SECONDS = {}                       # 명령별 마지막으로 걸린 시간 (실행 기록용)
+
 # ---------------------------------------------------------------- 고정값 (웹 도구와 동일)
 COURIER_HEADERS = [
     "받는분성명", "받는분우편번호", "받는분주소(전체, 분할)", "받는분전화번호1(P)", "받는분전화번호2(Q)",
@@ -227,14 +233,15 @@ def sheet_call(url, action, retries=3, **params):
     if not url:
         raise SheetError("구글 시트 연결 주소가 설정되지 않았습니다 (관리 탭).")
     last = ""
+    t0 = time.time()
     for attempt in range(retries):
         cb = f"cb_{time.time_ns()}"
         try:
-            r = requests.get(url, params={**params, "action": action, "callback": cb, "_": time.time_ns()},
-                             timeout=30, headers={"Cache-Control": "no-cache"})
+            r = _SESSION.get(url, params={**params, "action": action, "callback": cb, "_": time.time_ns()},
+                             timeout=(6, 30), headers={"Cache-Control": "no-cache"})
         except requests.RequestException as e:
             last = f"인터넷 연결 오류 ({type(e).__name__})"
-            time.sleep(1.5 * (attempt + 1))
+            time.sleep(1.0 * (attempt + 1))
             continue
         if "accounts.google.com" in r.url or "ServiceLogin" in r.text[:3000]:
             raise SheetError("구글 로그인이 필요한 배포 설정입니다. Apps Script → 배포 관리에서 "
@@ -253,5 +260,6 @@ def sheet_call(url, action, retries=3, **params):
             continue
         if not data.get("ok", False):
             raise SheetError(f"구글 시트 오류: {data.get('error') or '알 수 없음'}")
+        LAST_SECONDS[action] = round(time.time() - t0, 1)
         return data
     raise SheetError(f"구글 시트 연결 실패 ({retries}번 시도): {last}. 잠시 후 다시 시도해 주세요.")

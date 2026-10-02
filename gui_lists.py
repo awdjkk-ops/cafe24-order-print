@@ -129,6 +129,7 @@ class ListPanel(ttk.LabelFrame):
         if msg:
             messagebox.showwarning("입력 확인", msg)
             return
+        op._SHEET_CACHE.clear()          # 바뀌었으니 택배 파일 만들 때 새로 받게
         self.app.bg(lambda: C.sheet_call(self.url, self.add_action, retries=1, **v),
                     lambda _: (self.clear(), self.oid.delete(0, "end"), self.load(),
                                self.app.flash("등록했습니다.")), "구글 시트에 등록 중...")
@@ -141,6 +142,8 @@ class ListPanel(ttk.LabelFrame):
         names = [self.tree.item(i, "values")[1 if self.cols[0][0] == "level" else 0] for i in ids]
         if not messagebox.askyesno("삭제", f"{len(ids)}건을 삭제할까요?\n" + "\n".join(names[:10])):
             return
+
+        op._SHEET_CACHE.clear()
 
         def work():
             for i in ids:

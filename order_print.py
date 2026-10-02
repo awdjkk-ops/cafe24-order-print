@@ -28,6 +28,10 @@ import re
 
 import requests
 
+from netfix import prefer_ipv4
+
+prefer_ipv4()          # IPv6 연결 대기(약 20초) 없이 바로 연결
+
 import print_schedule as sch
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -563,6 +567,7 @@ COURIER_HIST_FILE = DATA / "courier_history.json"
 def courier_candidates():
     """출력한 주문 중 아직 택배 파일로 안 만든 주문 (뽑은 순서대로). [(주문요약, 출력한 때)]"""
     done = read_json(COURIER_DONE_FILE, {})
+    done.update(read_json(COURIER_SKIP_FILE, {}))       # 대기에서 뺀 주문도 제외
     out, seen = [], set()
     for b in reversed(load_history()):
         if b["kind"] not in PRINT_KINDS + (COURIER_ADD_KIND,):
@@ -634,6 +639,18 @@ def rows_for_orders(cfg, token, ids, progress=None, split_n=0):
 
 
 COURIER_ADD_KIND = "택배 대기 추가"     # 인쇄 없이 택배·라벨에만 넣은 주문 (카페24에서 직접 뽑은 경우 등)
+COURIER_SKIP_FILE = DATA / "courier_skip.json"   # 사람이 택배 대기에서 뺀 주문 (택배·라벨에 넣기로 다시 넣을 수 있음)
+
+
+def remove_from_courier_wait(ids):
+    """택배 대기에서 뺌. 주문서 출력 기록(뽑음 표시)은 그대로."""
+    skip = read_json(COURIER_SKIP_FILE, {})
+    stamp = dt.datetime.now().isoformat(timespec="seconds")
+    for i in ids:
+        skip[i] = stamp
+    write_json(COURIER_SKIP_FILE, skip)
+    log.info(f"[택배 대기 빼기] {len(ids)}건: " + ", ".join(list(ids)[:10]) + (" …" if len(ids) > 10 else ""))
+    return len(ids)
 
 
 def add_to_courier(orders, mark_printed=True):
@@ -652,6 +669,11 @@ def add_to_courier(orders, mark_printed=True):
         else:
             targets.append(o)
     if targets:
+        skip = read_json(COURIER_SKIP_FILE, {})
+        if any(o["order_id"] in skip for o in targets):      # 대기에서 뺐던 주문을 다시 넣음
+            for o in targets:
+                skip.pop(o["order_id"], None)
+            write_json(COURIER_SKIP_FILE, skip)
         add_history(COURIER_ADD_KIND, targets, "", 0)
         if mark_printed:
             printed = read_json(PRINTED_FILE, {})
@@ -668,6 +690,37 @@ def load_courier_history():
     return read_json(COURIER_HIST_FILE, [])
 
 
+_SHEET_CACHE = {}          # {"list": (받은 시각, 결과), "listExtra": (...)} — 택배 탭을 열 때 미리 받아둠
+SHEET_CACHE_SECONDS = {"list": 600, "listExtra": 60}   # 블랙리스트는 10분, 추가배송은 1분까지 미리 받은 것 사용
+
+
+def prefetch_sheet(cfg):
+    """블랙리스트·추가배송을 미리 받아둠 (택배 탭을 열 때). 실패해도 조용히 넘어감."""
+    import courier as C
+    url = cfg.get("sheet_api_url", "")
+    if not url:
+        return
+    for action in ("list", "listExtra"):
+        got = _SHEET_CACHE.get(action)
+        if got and time.time() - got[0] < 60:
+            continue
+        try:
+            _SHEET_CACHE[action] = (time.time(), C.sheet_call(url, action))
+        except Exception as e:
+            log.info(f"[구글 시트] 미리 받기 실패({action}): {e}")
+
+
+def _sheet_cached(url, action):
+    """10분 이내에 받아둔 게 있으면 그대로, 없으면 지금 받음"""
+    import courier as C
+    got = _SHEET_CACHE.get(action)
+    if got and time.time() - got[0] < SHEET_CACHE_SECONDS.get(action, 60):
+        return got[1]
+    data = C.sheet_call(url, action)
+    _SHEET_CACHE[action] = (time.time(), data)
+    return data
+
+
 def make_courier(cfg, token, ids, create=True, progress=None):
     """ids 주문으로 택배 파일 분석(create=False: 미리보기, 추가배송 안 지움) 또는 생성.
     돌려줌: {analysis, texts, popup, path, excluded, orders, rows, warnings}"""
@@ -677,10 +730,12 @@ def make_courier(cfg, token, ids, create=True, progress=None):
     excluded = []
     from concurrent.futures import ThreadPoolExecutor
     pool = ThreadPoolExecutor(max_workers=2)
-    f_black = pool.submit(C.sheet_call, url, "list") if url else None        # 구글 시트는 동시에
-    f_extra = pool.submit(C.sheet_call, url, "listExtra") if url else None
+    t0 = time.time()
+    f_black = pool.submit(_sheet_cached, url, "list") if url else None        # 구글 시트는 동시에 (미리 받은 게 있으면 그대로)
+    f_extra = pool.submit(_sheet_cached, url, "listExtra") if url else None
     pool.shutdown(wait=False)
     orders = fetch_orders_by_ids(cfg, token, ids, progress, excluded)
+    t_cafe = time.time() - t0
     verify_orders(orders, "택배 파일 만들기")
     split_n = 0
     if split_on():
@@ -710,6 +765,7 @@ def make_courier(cfg, token, ids, create=True, progress=None):
                 raise C.SheetError(f"추가배송 목록을 확인하지 못해 택배 파일을 만들지 않았습니다.\n{e}")
             warnings.append(f"추가배송 확인 실패: {e}")
 
+    t_sheet = time.time() - t0
     a = C.analyze(rows, extra, blacklist)
     result = {"analysis": a, "texts": C.summary_texts(a), "popup": C.popup_text(a), "path": None,
               "excluded": excluded, "orders": orders, "rows": rows, "warnings": warnings,
@@ -719,12 +775,15 @@ def make_courier(cfg, token, ids, create=True, progress=None):
 
     path = COURIER_DIR / f"택배발송_{dt.datetime.now():%Y-%m-%d_%H%M}.xlsx"
     C.write_courier_xlsx(a, path)
+    log.info(f"[택배 파일 시간] 카페24 {t_cafe:.1f}초 · 구글 시트까지 {t_sheet:.1f}초 · 파일 저장까지 {time.time() - t0:.1f}초"
+             f" (주문 {len(ids)}건)")
     failed = []
     for it in extra:
         try:
             if it.get("id") in (None, ""):
                 raise C.SheetError("번호 없음")
             C.sheet_call(url, "deleteExtra", id=it["id"])
+            _SHEET_CACHE.pop("listExtra", None)           # 지웠으니 다음엔 새로 받음
         except C.SheetError as e:
             failed.append(it)
             log.error(f"추가배송 삭제 실패({it.get('name')}): {e}")

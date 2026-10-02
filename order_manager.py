@@ -100,6 +100,8 @@ class App(tk.Tk):
             self.refresh_status(); self.admin_tab.refresh(); self.courier_tab.refresh()
             if nb.select() == str(self.pages["lists"]):
                 self.lists_tab.refresh()
+            if nb.select() == str(self.pages["courier"]) and self.cfg:
+                self.bg(lambda: op.prefetch_sheet(self.cfg), lambda _: None, busy=False)   # 블랙리스트·추가배송 미리 받기
         nb.bind("<<NotebookTabChanged>>", on_tab)
         self._build_print_tab()
         self.protocol("WM_DELETE_WINDOW", self.on_close)

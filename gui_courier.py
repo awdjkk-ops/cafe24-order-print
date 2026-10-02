@@ -34,10 +34,18 @@ class CourierTab(ttk.Frame):
         hint(wf, "이 프로그램으로 출력한 주문 중 아직 택배 파일을 만들지 않은 주문입니다 (뽑은 순서대로). "
                  "오늘 못 보내는 주문도 포함됩니다.", row=1, column=0, sticky="w", pady=(2, 6), wrap=430)
         cols = (("oid", "주문번호", 140), ("buyer", "주문자", 70), ("place", "경로", 85), ("when", "출력한 때", 100))
-        self.wait = ttk.Treeview(wf, columns=[c[0] for c in cols], show="headings", height=9)
+        self.wait = ttk.Treeview(wf, columns=[c[0] for c in cols], show="headings", height=9, selectmode="extended")
         for c, t, w in cols:
             self.wait.heading(c, text=t); self.wait.column(c, width=w, anchor="w")
         self.wait.grid(row=2, column=0, sticky="we")
+        wb = ttk.Frame(wf); wb.grid(row=3, column=0, sticky="we", pady=(8, 0))
+        self.b_rm = ttk.Button(wb, text="선택한 주문 대기에서 빼기", command=self.remove_selected)
+        self.b_rm.pack(side="left")
+        self.b_clear = ttk.Button(wb, text="대기 전체 비우기", style="Stop.TButton", command=self.clear_all)
+        self.b_clear.pack(side="right")
+        hint(wf, "뺀 주문은 택배 파일·라벨에 들어가지 않습니다. 주문서 출력 기록은 그대로이고, 출력 탭 주문 현황의 "
+                 "[택배·라벨에 넣기]로 언제든 다시 넣을 수 있습니다. (Ctrl·Shift+클릭으로 여러 개 선택)",
+             row=4, column=0, sticky="w", pady=(4, 0), wrap=430)
 
         # ---- 만들기
         af = ttk.LabelFrame(left, text=" 택배 발송용 파일 (롯데택배 알프스) ", padding=10)
@@ -84,7 +92,7 @@ class CourierTab(ttk.Frame):
             sb = ttk.Scrollbar(box, orient="vertical", command=t.yview); sb.grid(row=1, column=1, sticky="ns")
             t.configure(yscrollcommand=sb.set, state="disabled")
             self.texts[name] = t
-        self.buttons = [self.b_pre, self.b_make]
+        self.buttons = [self.b_pre, self.b_make, self.b_rm, self.b_clear]
         self.refresh()
 
     # ------------------------------------------------------------
@@ -92,11 +100,40 @@ class CourierTab(ttk.Frame):
         cand = op.courier_candidates()
         self.wait.delete(*self.wait.get_children())
         for o, when in cand:
-            self.wait.insert("", "end", values=(o["order_id"], o["buyer"], o["place"], when))
+            if not self.wait.exists(o["order_id"]):
+                self.wait.insert("", "end", iid=o["order_id"], values=(o["order_id"], o["buyer"], o["place"], when))
         self.wait_lb.configure(text=f"대기 {len(cand)}건")
         hist = op.load_courier_history()
         self.hist.configure(values=[f"{h['time'][5:16].replace('T', ' ')} · {h['count']}건 · {Path(h['file']).name}"
                                     for h in hist])
+
+    def remove_selected(self):
+        ids = list(self.wait.selection())
+        if not ids:
+            messagebox.showinfo("대기에서 빼기", "대기 목록에서 뺄 주문을 골라 주세요. (Ctrl·Shift+클릭으로 여러 개)")
+            return
+        if not messagebox.askyesno("대기에서 빼기", f"선택한 {len(ids)}건을 택배 대기에서 뺄까요?\n"
+                                                + "\n".join(ids[:8]) + ("\n…" if len(ids) > 8 else "")
+                                                + "\n\n주문서 출력 기록은 그대로이고, 출력 탭의 [택배·라벨에 넣기]로 다시 넣을 수 있습니다."):
+            return
+        op.remove_from_courier_wait(ids)
+        self.app.flash(f"{len(ids)}건을 택배 대기에서 뺐습니다.")
+        self.refresh()
+
+    def clear_all(self):
+        ids = [o["order_id"] for o, _ in op.courier_candidates()]
+        if not ids:
+            messagebox.showinfo("대기 전체 비우기", "택배 대기가 이미 비어 있습니다.")
+            return
+        if not messagebox.askyesno("대기 전체 비우기", f"택배 대기 {len(ids)}건을 모두 뺄까요?\n\n"
+                                                    "주문서 출력 기록은 그대로이고, 필요한 주문은 출력 탭의 [택배·라벨에 넣기]로 다시 넣을 수 있습니다."):
+            return
+        if not messagebox.askyesno("한 번 더 확인", f"정말 {len(ids)}건 전부 택배 대기에서 뺄까요?\n"
+                                                 "오늘 보낼 송장이 있다면 택배 파일을 먼저 만드세요.", icon="warning"):
+            return
+        op.remove_from_courier_wait(ids)
+        self.app.flash(f"택배 대기 {len(ids)}건을 모두 뺐습니다.")
+        self.refresh()
 
     def _fill(self, texts):
         for name, t in self.texts.items():
