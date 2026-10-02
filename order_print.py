@@ -233,29 +233,102 @@ def _printable_items(o):
     return [i for i in (o.get("items") or []) if not str(i.get("order_status") or "").startswith(("C", "R"))]
 
 
+BATCH = 100          # 한 번에 물어볼 주문 수
+
+
+def _fetch_one(cfg, token, oid):
+    try:
+        return api_get(cfg, token, f"/admin/orders/{oid}", {"embed": "items,receivers,buyer"}).get("order")
+    except RuntimeError as e:
+        log.warning(f"주문 불러오기 실패({oid}): {e}")
+        return None
+
+
+def _fetch_batch(cfg, token, chunk):
+    """주문번호 여러 개를 한 번에 물어봄. 돌려줌: {주문번호: 주문} (못 받은 건 빠짐)"""
+    days = [dt.date(int(i[:4]), int(i[4:6]), int(i[6:8])) for i in chunk if i[:8].isdigit()]
+    start = min(days) if days else dt.date.today() - dt.timedelta(days=60)
+    data = api_get(cfg, token, "/admin/orders", {
+        "order_id": ",".join(chunk), "embed": "items,receivers,buyer", "limit": len(chunk),
+        "start_date": (start - dt.timedelta(days=1)).isoformat(), "end_date": dt.date.today().isoformat()})
+    want = set(chunk)
+    return {o["order_id"]: o for o in data.get("orders", []) if o.get("order_id") in want}
+
+
+def _same_order(a, b):
+    """묶음으로 받은 주문과 한 건씩 받은 주문이 같은지 (주문서·택배에 쓰는 값 기준)"""
+    def key(o):
+        rcv = (o.get("receivers") or [{}])[0] or {}
+        buyer = o.get("buyer") or {}
+        buyer = buyer[0] if isinstance(buyer, list) and buyer else buyer
+        items = [(i.get("order_item_code"), i.get("product_name"), i.get("option_value"), str(i.get("quantity")),
+                  str(i.get("product_price")), i.get("order_status")) for i in (o.get("items") or [])]
+        return (o.get("order_id"), o.get("order_place_id"), str(o.get("payment_date")), o.get("canceled"),
+                rcv.get("name"), rcv.get("zipcode"), rcv.get("address_full"), rcv.get("cellphone"), rcv.get("phone"),
+                rcv.get("shipping_message"), buyer.get("name") if isinstance(buyer, dict) else None, sorted(items))
+    return key(a) == key(b)
+
+
+def _batch_usable(cfg, token, sample_batch):
+    """묶음 방식이 믿을 만한지 한 번 비교해서 기억 (버전이 바뀌면 다시 비교)"""
+    import updater
+    ver = updater.local_info().get("version", "")
+    st = read_json(STATE_FILE, {})
+    chk = st.get("batch_check", {})
+    if chk.get("version") == ver:
+        return chk.get("ok", False)
+    ok = False
+    if sample_batch:
+        oid, bo = next(iter(sample_batch.items()))
+        so = _fetch_one(cfg, token, oid)
+        ok = bool(so) and _same_order(bo, so)
+        log.info(f"[빠른 불러오기] 묶음·한 건 비교 ({oid}): {'같음 → 묶음으로 불러옵니다' if ok else '다름 → 한 건씩 불러옵니다'}")
+    st["batch_check"] = {"version": ver, "ok": ok, "time": dt.datetime.now().isoformat(timespec="seconds")}
+    write_json(STATE_FILE, st)
+    return ok
+
+
 def fetch_orders_by_ids(cfg, token, ids, progress=None, excluded=None):
-    """주문번호로 한 건씩 불러오기 (상태와 상관없이). 취소·반품된 품목은 빼고,
-    남은 품목이 없는 주문은 excluded 목록에 넣음."""
-    result = []
+    """주문번호로 불러오기 (상태와 상관없이). 100건씩 묶어서 물어보고, 못 받은 건 한 건씩 다시.
+    취소·반품된 품목은 빼고, 남은 품목이 없는 주문은 excluded 목록에 넣음. 순서는 ids 순서 그대로."""
     ids = list(dict.fromkeys(ids))          # 같은 주문번호는 한 번만
-    for n, oid in enumerate(ids, 1):
-        try:
-            data = api_get(cfg, token, f"/admin/orders/{oid}", {"embed": "items,receivers,buyer"})
-        except RuntimeError as e:
-            log.warning(f"주문 불러오기 실패({oid}): {e}")
-            data = {}
-        o = data.get("order")
+    got, done = {}, 0
+    import updater
+    chk = read_json(STATE_FILE, {}).get("batch_check", {})
+    use_batch = not (chk.get("version") == updater.local_info().get("version", "") and chk.get("ok") is False)
+    for k in range(0, len(ids), BATCH):
+        chunk = ids[k:k + BATCH]
+        if use_batch:
+            try:
+                part = _fetch_batch(cfg, token, chunk)
+                if k == 0 and not _batch_usable(cfg, token, part):
+                    use_batch = False
+                    part = {}
+                got.update(part)
+            except Exception as e:
+                log.warning(f"[빠른 불러오기] 묶음 요청 실패 → 한 건씩: {e}")
+                use_batch = False
+        for oid in chunk:                      # 묶음에서 못 받은 주문은 한 건씩
+            if oid not in got:
+                o = _fetch_one(cfg, token, oid)
+                if o:
+                    got[oid] = o
+                time.sleep(0.1)
+            done += 1
+            if progress and (done % 10 == 0 or done == len(ids) or oid not in got):
+                progress(done, len(ids))
+    result = []
+    for oid in ids:
+        o = got.get(oid)
         if o and o.get("canceled") != "T":
             o["items"] = _printable_items(o)
             if o["items"]:
                 result.append(o)
-            elif excluded is not None:
-                excluded.append(oid)
-        elif excluded is not None:
+                continue
+        if excluded is not None:
             excluded.append(oid)
-        if progress:
-            progress(n, len(ids))
-        time.sleep(0.15)
+    if progress:
+        progress(len(ids), len(ids))
     return result
 
 
@@ -571,6 +644,11 @@ def make_courier(cfg, token, ids, create=True, progress=None):
     url = cfg.get("sheet_api_url", "")
     warnings = []
     excluded = []
+    from concurrent.futures import ThreadPoolExecutor
+    pool = ThreadPoolExecutor(max_workers=2)
+    f_black = pool.submit(C.sheet_call, url, "list") if url else None        # 구글 시트는 동시에
+    f_extra = pool.submit(C.sheet_call, url, "listExtra") if url else None
+    pool.shutdown(wait=False)
     orders = fetch_orders_by_ids(cfg, token, ids, progress, excluded)
     verify_orders(orders, "택배 파일 만들기")
     split_n = 0
@@ -583,7 +661,7 @@ def make_courier(cfg, token, ids, create=True, progress=None):
     blacklist = []
     if url:
         try:
-            blacklist = C.sheet_call(url, "list").get("items", [])
+            blacklist = f_black.result().get("items", [])
         except C.SheetError as e:
             if create:     # 실제 파일은 블랙리스트 확인 없이 만들지 않음
                 raise C.SheetError(f"블랙리스트를 확인하지 못해 택배 파일을 만들지 않았습니다.\n{e}")
@@ -595,7 +673,7 @@ def make_courier(cfg, token, ids, create=True, progress=None):
     extra = []
     if url:
         try:
-            extra = C.sheet_call(url, "listExtra").get("items", [])
+            extra = f_extra.result().get("items", [])
         except C.SheetError as e:
             if create:
                 raise C.SheetError(f"추가배송 목록을 확인하지 못해 택배 파일을 만들지 않았습니다.\n{e}")
