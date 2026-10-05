@@ -26,13 +26,15 @@ def _t(r, k):
 
 # ---------------------------------------------------------------- 순서·색 (웹 도구와 동일)
 def build_sequence(rows):
-    """원본 줄(상품 단위) → 라벨 순서. 수령인(이름+주소)이 바뀔 때마다 이름 칸을 먼저."""
+    """원본 줄(상품 단위) → 라벨 순서. 수령인(이름+주소)이나 주문번호가 바뀔 때마다 이름 칸을 먼저.
+    (같은 고객의 주문이 연달아 있어도 주문마다 이름 칸이 들어가서 상품이 섞여 보이지 않게)"""
     seq, prev = [], None
     for r in rows:
         key = _t(r, "수령인") + "||" + _t(r, "주소")
-        if key != prev:
+        mark = (key, _t(r, "주문번호"))
+        if mark != prev:
             seq.append({"type": "NAME", "text": _t(r, "수령인"), "key": key})
-            prev = key
+            prev = mark
         seq.append({"type": "PROD", "line1": _t(r, "주문상품명"), "line2": _t(r, "옵션")})
     return seq
 
