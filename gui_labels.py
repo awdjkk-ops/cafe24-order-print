@@ -90,6 +90,9 @@ class LabelTab(ttk.Frame):
         bot = ttk.Frame(right, style="Page.TFrame"); bot.grid(row=2, column=0, sticky="we")
         self.info_lb = ttk.Label(bot, text="", style="Page.TLabel"); self.info_lb.pack(side="left")
         ttk.Button(bot, text="이 페이지 초기화", style="Page.TButton", command=self.reset_page).pack(side="right")
+        from gui_courier import SplitBadge, put_on_top
+        self.split_badge = SplitBadge(pf, app, wrap=280)
+        put_on_top(pf, self.split_badge)
         self.buttons = [self.b_print, self.b_xlsx]
         self.draw()
 

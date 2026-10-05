@@ -100,6 +100,7 @@ class App(tk.Tk):
             self.refresh_status(); self.admin_tab.refresh(); self.courier_tab.refresh()
             if nb.select() == str(self.pages["lists"]):
                 self.lists_tab.refresh()
+            self.label_tab.split_badge.refresh()
             if nb.select() == str(self.pages["courier"]) and self.cfg:
                 self.bg(lambda: op.prefetch_sheet(self.cfg), lambda _: None, busy=False)   # 블랙리스트·추가배송 미리 받기
         nb.bind("<<NotebookTabChanged>>", on_tab)
@@ -521,6 +522,8 @@ class App(tk.Tk):
 
     def toggle_split(self):
         op.set_split_today(self.split_var.get())
+        for t in (self.courier_tab, self.label_tab):
+            t.split_badge.refresh()
         op.log.info(f"[스마트스토어 따로 작업] 오늘 {'켬' if self.split_var.get() else '끔'}")
         self._split_text()
 

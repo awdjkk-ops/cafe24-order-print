@@ -19,6 +19,34 @@ BOX_HINTS = {
 }
 
 
+class SplitBadge(ttk.Frame):
+    """'오늘 스마트스토어 따로 작업: 켜짐/꺼짐' 표시 (택배·라벨 탭). 누르면 출력 탭으로 가서 바꿀 수 있음."""
+
+    def __init__(self, parent, app, wrap=420):
+        super().__init__(parent)
+        self.app = app
+        self.pill = T.Pill(self, text=" ", bg="#EFEFEC", fg=T.MUTED)
+        self.pill.pack(anchor="w")
+        self.pill.configure(cursor="hand2")
+        self.pill.bind("<Button-1>", lambda e: app.show_tab("print"))
+        self.note = ttk.Label(self, text="", style="Hint.TLabel", wraplength=wrap, justify="left")
+        self.note.pack(anchor="w", pady=(3, 0))
+        self.refresh()
+
+    def refresh(self):
+        on = op.split_on()
+        self.pill.configure(text=f"오늘 스마트스토어 따로 작업: {'켜짐' if on else '꺼짐'}",
+                            bg="#E3F6D8" if on else "#EFEFEC", fg="#2E7D32" if on else T.MUTED)
+        self.note.configure(text=("스마트스토어 쪽이 맨 앞에 모입니다" if on else "평소처럼 뽑은 순서대로") + " · 바꾸려면 눌러서 출력 탭으로")
+
+
+def put_on_top(card, widget, pady=(0, 8)):
+    """카드 맨 위에 끼워 넣기 (기존 내용은 한 줄씩 아래로)"""
+    for w in card.grid_slaves():
+        w.grid_configure(row=int(w.grid_info()["row"]) + 1)
+    widget.grid(row=0, column=0, columnspan=3, sticky="w", pady=pady)
+
+
 class CourierTab(ttk.Frame):
     def __init__(self, master, app):
         super().__init__(master, padding=12, style="Page.TFrame")
@@ -62,6 +90,7 @@ class CourierTab(ttk.Frame):
         self.stat = ttk.Label(af, text="", justify="left", foreground=T.GREEN_D, wraplength=430)
         self.stat.grid(row=4, column=0, sticky="w", pady=(8, 0))
         bb = ttk.Frame(af); bb.grid(row=5, column=0, sticky="w", pady=(6, 0))
+        self.split_badge = SplitBadge(af, app)
         ttk.Button(bb, text="만든 파일 열기", command=self.open_file).pack(side="left")
         ttk.Button(bb, text="폴더 열기", command=lambda: op.open_file(op.COURIER_DIR)).pack(side="left", padx=6)
 
@@ -92,11 +121,13 @@ class CourierTab(ttk.Frame):
             sb = ttk.Scrollbar(box, orient="vertical", command=t.yview); sb.grid(row=1, column=1, sticky="ns")
             t.configure(yscrollcommand=sb.set, state="disabled")
             self.texts[name] = t
+        put_on_top(self.split_badge.master, self.split_badge)
         self.buttons = [self.b_pre, self.b_make, self.b_rm, self.b_clear]
         self.refresh()
 
     # ------------------------------------------------------------
     def refresh(self):
+        self.split_badge.refresh()
         cand = op.courier_candidates()
         self.wait.delete(*self.wait.get_children())
         for o, when in cand:
