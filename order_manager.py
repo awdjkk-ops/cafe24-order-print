@@ -127,6 +127,9 @@ class App(tk.Tk):
             if upd:
                 self.update_pill.configure(text=f"새 버전 v{upd['version']} 있음 · 업데이트")
                 self.update_pill.pack(side="left", padx=(14, 0), pady=12)
+                if not manual and not getattr(self, "_update_popup_shown", False):
+                    self._update_popup_shown = True            # 켤 때 한 번만
+                    UpdateDialog(self, upd, lambda: self.do_update(confirm=False))
             else:
                 self.update_pill.pack_forget()
             if manual:
@@ -144,7 +147,7 @@ class App(tk.Tk):
                 return False, e
         self.bg(work, done, busy=False)
 
-    def do_update(self):
+    def do_update(self, confirm=True):
         upd = self.pending_update
         if not upd:
             return
@@ -152,7 +155,7 @@ class App(tk.Tk):
             messagebox.showinfo("업데이트", "출력이나 다른 작업이 진행 중입니다. 끝난 뒤 다시 눌러 주세요.")
             return
         notes = upd.get("notes") or "(바뀐 내용 설명 없음)"
-        if not messagebox.askyesno("업데이트", f"새 버전 v{upd['version']}으로 업데이트할까요?\n"
+        if confirm and not messagebox.askyesno("업데이트", f"새 버전 v{upd['version']}으로 업데이트할까요?\n"
                                             f"(지금 v{updater.local_info().get('version')})\n\n바뀐 내용:\n{notes}\n\n"
                                             "설정·인증·출력 기록은 그대로 유지되고, 문제가 있으면 관리 탭에서 이전 버전으로 되돌릴 수 있습니다.\n"
                                             "업데이트가 끝나면 창을 다시 엽니다."):
@@ -956,6 +959,44 @@ class App(tk.Tk):
                 rows.append((br, mark))
             self._fill_orders(rows, f"카페24에서 '{text}' 검색 결과 {len(rows)}건 (최근 3개월)")
         self.bg(lambda: op.search_cafe24(self.cfg, op.get_access_token(self.cfg), text), done, "카페24에서 찾는 중...")
+
+
+class UpdateDialog(tk.Toplevel):
+    """프로그램을 켰을 때 새 버전이 있으면 뜨는 작은 창 (업데이트는 버튼을 눌러야만 진행)"""
+
+    def __init__(self, app, upd, on_update):
+        super().__init__(app)
+        import updater
+        self.title("새 버전이 있습니다")
+        self.configure(background=T.CARD)
+        self.resizable(False, False)
+        self.transient(app)
+        self.on_update = on_update
+        f = ttk.Frame(self, padding=20); f.pack(fill="both")
+        ttk.Label(f, text="새 버전이 있습니다", style="Title.TLabel").pack(anchor="w")
+        T.Pill(f, text=f"지금 v{updater.local_info().get('version', '?')}   →   새 버전 v{upd['version']}",
+               bg="#E8F0FE", fg="#1A56C4").pack(anchor="w", pady=(8, 10))
+        ttk.Label(f, text="바뀐 내용", font=T.f(10, True)).pack(anchor="w")
+        notes = tk.Text(f, width=58, height=min(10, max(3, str(upd.get("notes", "")).count("\n") + 2)), wrap="word")
+        T.text_box(notes)
+        notes.insert("1.0", upd.get("notes") or "(바뀐 내용 설명 없음)")
+        notes.configure(state="disabled")
+        notes.pack(fill="x", pady=(4, 10))
+        ttk.Label(f, text="설정·인증·출력 기록은 그대로 유지됩니다. 업데이트가 끝나면 창이 다시 열립니다.\n"
+                          "아침 자동 출력은 업데이트와 상관없이 예정대로 진행됩니다.",
+                  style="Hint.TLabel", justify="left").pack(anchor="w")
+        bf = ttk.Frame(f); bf.pack(fill="x", pady=(16, 0))
+        ttk.Button(bf, text="지금 업데이트", style="Accent.TButton", command=self.go).pack(side="right")
+        ttk.Button(bf, text="나중에", command=self.destroy).pack(side="right", padx=6)
+        self.update_idletasks()
+        x = app.winfo_rootx() + (app.winfo_width() - self.winfo_width()) // 2
+        y = app.winfo_rooty() + (app.winfo_height() - self.winfo_height()) // 3
+        self.geometry(f"+{max(0, x)}+{max(0, y)}")
+        self.lift(); self.focus_force()
+
+    def go(self):
+        self.destroy()
+        self.on_update()
 
 
 class AddCourierDialog(tk.Toplevel):

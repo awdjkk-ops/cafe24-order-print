@@ -1128,8 +1128,19 @@ def verify_orders(orders, what="인쇄"):
 
 
 class run_lock:
-    """동시에 두 번 출력되지 않도록 잠금"""
+    """동시에 두 번 출력되지 않도록 잠금.
+    wait=초: 다른 작업(업데이트·지금 출력·택배 파일 등)이 끝날 때까지 기다림 (자동 출력용)"""
+    def __init__(self, wait=0):
+        self.wait = wait
+
     def __enter__(self):
+        if another_running() and self.wait:
+            log.info(f"[대기] 다른 작업이 진행 중이라 끝날 때까지 기다립니다 (최대 {self.wait // 60}분)")
+            end = time.time() + self.wait
+            while another_running() and time.time() < end:
+                time.sleep(5)
+            if not another_running():
+                log.info("[대기] 다른 작업이 끝나서 이어서 진행합니다")
         if another_running():
             raise Busy("다른 출력 작업이 진행 중입니다. 끝난 뒤 다시 시도해 주세요.")
         LOCK_FILE.write_text(str(os.getpid()))
@@ -1802,11 +1813,15 @@ def main():
         do_auth(cfg)
         return
     try:
-        with run_lock():
+        with run_lock(wait=600 if mode == "auto" else 0):      # 자동 출력은 최대 10분까지 기다렸다가 진행
             run(cfg, mode)
     except Busy as e:
         print("\n" + str(e))
         log.info(str(e))
+        if mode == "auto":                                     # 10분이 지나도 안 끝나면 사람에게 알림
+            msg = "자동 출력 시간에 다른 작업이 10분 넘게 진행 중이어서 자동 출력을 하지 못했습니다. '지금 출력'으로 뽑아 주세요."
+            print_notice(cfg, msg)
+            _auto_fail(msg)
     except AuthError as e:
         log.error(str(e))
         msg = ("카페24 인증이 만료되었거나 없습니다.\n\n"
