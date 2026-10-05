@@ -164,7 +164,7 @@ class Notice(tk.Tk):
             self._dot(T.GREEN)
             self.title_lb.configure(text=f"✓ {slot} 자동 출력 완료")
             self.body.configure(text=f"주문 {st.get('count', 0)}건 · 주문서 {st.get('pages', '?')}장 + 출력 확인 용지 {st.get('end_pages', 1)}장\n"
-                                     f"({st.get('breakdown', '')})\n마지막 주문: {last.get('order_id', '')}  {last.get('buyer', '')}")
+                                     f"({st.get('breakdown', '')})\n마지막 주문: {last.get('order_id', '')}  {last.get('receiver') or last.get('buyer', '')}")
             self.hint.configure(text="프린터에서 맨 마지막 '출력 확인 용지'가 나왔는지 확인하세요. 나왔다면 모두 인쇄된 것입니다."
                                      + ("\n(이 프린터는 상태를 알려주지 않아 인쇄 완료를 직접 확인하지 못했습니다)" if res == "unknown" else ""))
         elif res == "problem":

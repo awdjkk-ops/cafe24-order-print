@@ -373,7 +373,7 @@ class App(tk.Tk):
         hint(bf, "카페24의 상품준비중·배송준비중 주문 전체를 결제시각 순으로 보여줍니다. 초록 줄이 '여기까지 뽑음' 위치입니다. "
                  "주문번호나 이름을 입력해 [목록에서 찾기]를 누르면 그 주문으로 이동합니다.",
              row=1, column=0, sticky="w", pady=(4, 6), wrap=640)
-        cols = (("pay", "결제시각", 100), ("oid", "주문번호", 140), ("buyer", "주문자", 70), ("place", "경로", 85),
+        cols = (("pay", "결제시각", 100), ("oid", "주문번호", 140), ("buyer", "수령인", 70), ("place", "경로", 85),
                 ("items", "상품", 40), ("st", "상태", 200))
         self.board = ttk.Treeview(bf, columns=[c[0] for c in cols], show="headings", height=14, selectmode="extended")
         for c, txt, w in cols:
@@ -634,7 +634,7 @@ class App(tk.Tk):
             st = ("✓ 뽑음" if done else "↺ 되돌림 · 다음에 출력" if br["order_id"] in reverted
                   else "● 늦게 들어옴 · 다음에 출력" if late else "○ 다음에 출력")
             self.board.insert("", "end", iid=br["order_id"], tags=("done" if done else "late" if late else "todo",),
-                              values=(br["pay_date"][5:], br["order_id"], br["buyer"], br["place"], br["items"], st))
+                              values=(br["pay_date"][5:], br["order_id"], br["receiver"] or br["buyer"], br["place"], br["items"], st))
             if i == last_done:
                 self.board.insert("", "end", iid="__line__", tags=("line",),
                                   values=("", "▲ 여기까지 뽑음", "", "", "", ""))
@@ -655,7 +655,7 @@ class App(tk.Tk):
         if last_done >= 0:
             o = op.order_brief(rows[last_done][0])
             late_n = sum(1 for _, d, l in rows if l)
-            self.last_lb.configure(text=f"마지막으로 뽑은 주문: {o['order_id']}  {o['buyer']}\n"
+            self.last_lb.configure(text=f"마지막으로 뽑은 주문: {o['order_id']}  {o['receiver'] or o['buyer']}\n"
                                         f"결제 {o['pay_date'][5:]} · {o['place']}"
                                         + (f"\n늦게 들어온 주문 {late_n}건은 다음 출력에 나옵니다." if late_n else ""))
         else:
@@ -690,7 +690,7 @@ class App(tk.Tk):
         below = [o for o, _, _ in self.board_rows[i + 1:]]
         br = op.order_brief(above[-1])
         late_n = sum(1 for _, _, l in self.board_rows[:i + 1] if l)
-        msg = (f"{br['order_id']} {br['buyer']} (결제 {br['pay_date'][5:]})까지 뽑은 것으로 맞춥니다.\n\n"
+        msg = (f"{br['order_id']} {br['receiver'] or br['buyer']} (결제 {br['pay_date'][5:]})까지 뽑은 것으로 맞춥니다.\n\n"
                f"· 뽑음: {len(above)}건\n· 다음에 출력: {len(below)}건\n")
         if late_n:
             msg += (f"\n※ 선 위쪽에 '늦게 들어온' 주문 {late_n}건이 있습니다. 카페24에서 이 주문도 뽑으셨다면 계속하고, "
@@ -756,7 +756,7 @@ class App(tk.Tk):
         before = [o for o, _, l in self.board_rows[:i] if not l]
         target = late_above + [o for o, _, _ in self.board_rows[i:]]
         br = op.order_brief(self.board_rows[i][0])
-        msg = (f"{br['order_id']} {br['buyer']} (결제 {br['pay_date'][5:]})부터 끝까지 인쇄합니다.\n"
+        msg = (f"{br['order_id']} {br['receiver'] or br['buyer']} (결제 {br['pay_date'][5:]})부터 끝까지 인쇄합니다.\n"
                f"· 인쇄: {len(target)}건 ({self._breakdown(target)})\n")
         if late_above:
             msg += f"   └ 이 중 늦게 들어온 주문 {len(late_above)}건 포함\n"

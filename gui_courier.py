@@ -33,7 +33,7 @@ class CourierTab(ttk.Frame):
         self.wait_lb = ttk.Label(wf, text="", style="Big.TLabel"); self.wait_lb.grid(row=0, column=0, sticky="w")
         hint(wf, "이 프로그램으로 출력한 주문 중 아직 택배 파일을 만들지 않은 주문입니다 (뽑은 순서대로). "
                  "오늘 못 보내는 주문도 포함됩니다.", row=1, column=0, sticky="w", pady=(2, 6), wrap=430)
-        cols = (("oid", "주문번호", 140), ("buyer", "주문자", 70), ("place", "경로", 85), ("when", "출력한 때", 100))
+        cols = (("oid", "주문번호", 140), ("buyer", "수령인", 70), ("place", "경로", 85), ("when", "출력한 때", 100))
         self.wait = ttk.Treeview(wf, columns=[c[0] for c in cols], show="headings", height=9, selectmode="extended")
         for c, t, w in cols:
             self.wait.heading(c, text=t); self.wait.column(c, width=w, anchor="w")
@@ -101,7 +101,7 @@ class CourierTab(ttk.Frame):
         self.wait.delete(*self.wait.get_children())
         for o, when in cand:
             if not self.wait.exists(o["order_id"]):
-                self.wait.insert("", "end", iid=o["order_id"], values=(o["order_id"], o["buyer"], o["place"], when))
+                self.wait.insert("", "end", iid=o["order_id"], values=(o["order_id"], o.get("receiver") or o["buyer"], o["place"], when))
         self.wait_lb.configure(text=f"대기 {len(cand)}건")
         hist = op.load_courier_history()
         self.hist.configure(values=[f"{h['time'][5:16].replace('T', ' ')} · {h['count']}건 · {Path(h['file']).name}"
