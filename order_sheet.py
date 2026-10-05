@@ -101,6 +101,22 @@ def _st(n, f="KR", s=6.3, **k):
 S = _st("n"); S_C = _st("c", alignment=1); S_R = _st("r", alignment=2)
 S_TITLE = _st("t", "KRB", 11); S_H = _st("h", "KRB", 8.2); S_BIG = _st("big", "KRB", 7)
 
+QTY_COL_W = 7 * mm          # 수량 칸 폭 (양식 그대로)
+QTY_EMPH = 8.3              # 2개 이상 주문한 상품의 수량 글자 크기 (기본 6.3 + 2pt, 굵게)
+
+
+def qty_para(q):
+    """수량 칸: 2개 이상이면 굵고 크게. 칸을 넘지 않도록 필요하면 그 칸에 맞는 크기까지만."""
+    if q < 2:
+        return P(str(q), S_C)
+    from reportlab.pdfbase.pdfmetrics import stringWidth
+    room = QTY_COL_W - 4 - 0.5            # 좌우 여백 2pt씩 빼고 약간의 여유
+    size = QTY_EMPH
+    while size > 6.3 and stringWidth(str(q), "KRB", size) > room:
+        size -= 0.2
+    return P(str(q), ParagraphStyle(f"qty{size:.1f}", fontName="KRB", fontSize=size, leading=6.3 * 1.25,
+                                    alignment=1))
+
 
 def P(t, s=S):
     return Paragraph(t, s)
@@ -265,7 +281,7 @@ def _story(v):
 
     # 주문내역
     story += [P(f"주문내역({len(v['items'])} 건)", S_H), Spacer(1, 1.2 * mm)]
-    w = [9.5 * mm, 49 * mm, 7 * mm, 11.5 * mm, 13.5 * mm, 10 * mm, 11 * mm, 19 * mm]
+    w = [9.5 * mm, 49 * mm, QTY_COL_W, 11.5 * mm, 13.5 * mm, 10 * mm, 11 * mm, 19 * mm]
     rows = [[P("상품명/옵션", S_C), "", P("수량", S_C), P("판매가", S_C), P("상품구매금액", S_C),
              P("배송비", S_C), P("운송장번호", S_C), P("주문상태", S_C)]]
     tq = tu = ta = 0
@@ -283,7 +299,7 @@ def _story(v):
             name += f'<br/><font color="{BLUE}">{E(it["option"])}</font>'
         status = E(it["status"]) + (f"<br/>{pay_badge}{E(v['paid_txt'])}" if v["paid_txt"] else "")
         fee = float(it["ship_fee"] or 0)
-        rows.append([img, P(name), P(str(it["qty"]), S_C), P(won(it["unit"]), S_R), P(won(it["amount"]), S_R),
+        rows.append([img, P(name), qty_para(it["qty"]), P(won(it["unit"]), S_R), P(won(it["amount"]), S_R),
                      P(f'({E(it["ship_type"][:2])})<br/>{won(fee)}' + ("<br/>(무료)" if not fee else ""), S_C),
                      P(E(it["tracking"]), S_C), P(status, S_C)])
     rows.append([P("계", S_C), "", P(str(tq), S_C), P(won(tu), S_R), P(won(ta), S_R),
