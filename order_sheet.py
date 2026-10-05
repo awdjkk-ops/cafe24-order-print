@@ -105,6 +105,49 @@ QTY_COL_W = 7 * mm          # 수량 칸 폭 (양식 그대로)
 QTY_EMPH = 8.3              # 2개 이상 주문한 상품의 수량 글자 크기 (기본 6.3 + 2pt, 굵게)
 
 
+MARKER = colors.HexColor("#FFF29A")    # 형광펜 (연한 노랑)
+MARKER_H = 3.4 * mm                     # 형광펜 굵기 (글자 한 줄)
+
+
+class _Marker(Flowable):
+    """상품명 칸: 형광펜 한 줄을 상품명 시작부터 옆 수량 숫자까지 이어서 긋고, 그 위에 글자를 씀.
+    색만 칠하므로 칸 크기·줄 높이는 그대로."""
+
+    def __init__(self, para, qty_text, qty_size):
+        super().__init__()
+        self.para, self.qty_text, self.qty_size = para, qty_text, qty_size
+
+    def wrap(self, aw, ah):
+        self.aw = aw
+        self.w, self.h = self.para.wrap(aw, ah)
+        return self.w, self.h
+
+    def draw(self):
+        from reportlab.pdfbase.pdfmetrics import stringWidth
+        c = self.canv
+        num_w = stringWidth(self.qty_text, "KRB", self.qty_size)
+        # 이 칸 오른쪽 여백(2) + 수량 칸 왼쪽 여백(2) + 수량 칸 가운데까지 + 숫자 절반 + 여유
+        extend = 2 + 2 + (QTY_COL_W - 4) / 2 + num_w / 2 + 1.5
+        y = (self.h - MARKER_H) / 2
+        c.saveState()
+        c.setFillColor(MARKER)
+        c.rect(-1, y, self.aw + 1 + extend, MARKER_H, stroke=0, fill=1)
+        c.restoreState()
+        self.para.drawOn(c, 0, 0)
+
+
+def qty_size(q):
+    """수량 글자 크기 (2개 이상이면 크게, 칸에 맞게)"""
+    if q < 2:
+        return 6.3
+    from reportlab.pdfbase.pdfmetrics import stringWidth
+    room = QTY_COL_W - 4 - 0.5
+    size = QTY_EMPH
+    while size > 6.3 and stringWidth(str(q), "KRB", size) > room:
+        size -= 0.2
+    return size
+
+
 def qty_para(q):
     """수량 칸: 2개 이상이면 굵고 크게. 칸을 넘지 않도록 필요하면 그 칸에 맞는 크기까지만."""
     if q < 2:
@@ -268,7 +311,7 @@ def _box(rows, widths, label_cols=(0,), extra=()):
     return t
 
 
-def _story(v):
+def _story(v, highlight=False):
     story = [P("주문상세정보", S_TITLE), Spacer(1, 3 * mm)]
     icon = icon_img(v["place"])
     head = f'<font name="KRB">주문번호 :</font> ' + (icon + "&nbsp;" if icon else "") + E(v["order_id"])
@@ -299,7 +342,10 @@ def _story(v):
             name += f'<br/><font color="{BLUE}">{E(it["option"])}</font>'
         status = E(it["status"]) + (f"<br/>{pay_badge}{E(v['paid_txt'])}" if v["paid_txt"] else "")
         fee = float(it["ship_fee"] or 0)
-        rows.append([img, P(name), qty_para(it["qty"]), P(won(it["unit"]), S_R), P(won(it["amount"]), S_R),
+        name_cell = P(name)
+        if highlight and it["qty"] >= 2:                  # 오른쪽 주문서: 2개 이상 상품에 형광펜
+            name_cell = _Marker(name_cell, str(it["qty"]), qty_size(it["qty"]))
+        rows.append([img, name_cell, qty_para(it["qty"]), P(won(it["unit"]), S_R), P(won(it["amount"]), S_R),
                      P(f'({E(it["ship_type"][:2])})<br/>{won(fee)}' + ("<br/>(무료)" if not fee else ""), S_C),
                      P(E(it["tracking"]), S_C), P(status, S_C)])
     rows.append([P("계", S_C), "", P(str(tq), S_C), P(won(tu), S_R), P(won(ta), S_R),
@@ -376,7 +422,7 @@ class _OrdersDoc(BaseDocTemplate):
                 self.progress(f.idx + 1)
 
 
-def _single_copy_pdf(views, totals, progress=None):
+def _single_copy_pdf(views, totals, progress=None, highlight=False):
     """모든 주문서를 주문서 1부 크기로 한 PDF에 연속으로 그림 (글꼴·사진을 한 번만 넣어 용량 절약)."""
     buf = io.BytesIO()
     doc = _OrdersDoc(buf, pagesize=(HALF_W, HALF_H))
@@ -401,7 +447,7 @@ def _single_copy_pdf(views, totals, progress=None):
         if i:
             story.append(PageBreak())
         story.append(_OrderStart(i))
-        story += _story(v)[0]
+        story += _story(v, highlight)[0]
     doc.build(story)
     return buf.getvalue(), doc.counts
 
@@ -458,6 +504,12 @@ def build_orders_pdf(views, out_path, progress=None, end_info=None, divider=None
     _, totals = _single_copy_pdf(views, {}, None)            # 1회차: 주문별 쪽수 계산
     data, _ = _single_copy_pdf(views, totals, step)           # 2회차: 쪽수 넣어서 완성
     src = PdfReader(io.BytesIO(data))
+    marked = src                                               # 오른쪽 주문서 (형광펜 있으면 따로)
+    if any(it["qty"] >= 2 for v in views for it in v["items"]):
+        data_hl, _ = _single_copy_pdf(views, totals, None, highlight=True)
+        hl = PdfReader(io.BytesIO(data_hl))
+        if len(hl.pages) == len(src.pages):                   # 색만 칠하므로 쪽수가 같아야 정상
+            marked = hl
     w = PdfWriter()
     cut = sum(totals.get(i, 1) for i in range(divider["index"])) if divider else -1   # 구분 용지 넣을 자리
     for n, hp in enumerate(src.pages):
@@ -465,8 +517,8 @@ def build_orders_pdf(views, out_path, progress=None, end_info=None, divider=None
             for pg in PdfReader(io.BytesIO(divider_pdf(divider))).pages:
                 w.add_page(pg)
         sheet = PageObject.create_blank_page(width=SHEET_W, height=SHEET_H)
-        sheet.merge_transformed_page(hp, Transformation().translate(0, 0))
-        sheet.merge_transformed_page(hp, Transformation().translate(HALF_W, 0))
+        sheet.merge_transformed_page(hp, Transformation().translate(0, 0))                 # 왼쪽: 그대로
+        sheet.merge_transformed_page(marked.pages[n], Transformation().translate(HALF_W, 0))  # 오른쪽: 형광펜
         w.add_page(sheet)
     if end_info:                      # 자동 출력: 맨 뒤에 출력 확인 용지
         for pg in PdfReader(io.BytesIO(end_sheet_pdf(end_info))).pages:
