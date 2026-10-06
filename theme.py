@@ -259,16 +259,26 @@ class Pill(tk.Canvas):
 class RoundBox(tk.Canvas):
     """폭에 맞춰 늘어나는 둥근 상자 (알림 띠 등). 글자는 자동 줄바꿈."""
 
-    def __init__(self, parent, text="", fill=RED, fg="white", outline=None, under=BG, font=None, pad=(14, 9)):
+    def __init__(self, parent, text="", fill=RED, fg="white", outline=None, under=BG, font=None, pad=(14, 9),
+                 on_close=None):
         super().__init__(parent, highlightthickness=0, bd=0, background=under, height=36)
         self._t, self._fill, self._fg, self._ol, self._font, self._pad = text, fill, fg, outline, font or f(10, True), pad
+        self._on_close = on_close
         self.bind("<Configure>", lambda e: self._draw())
 
     def _draw(self):
         w = max(self.winfo_width(), 50)
         self.delete("all")
+        close_w = 0
+        if self._on_close:                      # 오른쪽 [확인 ✕] — 누르면 이 경고를 닫음
+            cid = self.create_text(w - self._pad[0], self._pad[1], text="확인 ✕", fill=self._fg, font=f(10, True),
+                                   anchor="ne", tags="close")
+            close_w = self.bbox(cid)[2] - self.bbox(cid)[0] + 14
+            self.tag_bind("close", "<Button-1>", lambda e: self._on_close())
+            self.tag_bind("close", "<Enter>", lambda e: self.configure(cursor="hand2"))
+            self.tag_bind("close", "<Leave>", lambda e: self.configure(cursor=""))
         tid = self.create_text(self._pad[0], self._pad[1], text=self._t, fill=self._fg, font=self._font, anchor="nw",
-                               width=w - self._pad[0] * 2)
+                               width=w - self._pad[0] * 2 - close_w)
         x1, y1, x2, y2 = self.bbox(tid)
         h = y2 + self._pad[1]
         if int(self.cget("height")) != h:
@@ -301,9 +311,9 @@ def text_box(t):
     return t
 
 
-def alert(parent, text):
-    """빨간 알림 띠 (둥근 모서리)"""
-    return RoundBox(parent, text=text, fill=RED, fg="white", under=BG)
+def alert(parent, text, on_close=None):
+    """빨간 알림 띠 (둥근 모서리). on_close가 있으면 오른쪽에 [확인 ✕]"""
+    return RoundBox(parent, text=text, fill=RED, fg="white", under=BG, on_close=on_close)
 
 
 def pill(parent, text, on=False, under=CARD):

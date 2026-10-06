@@ -1259,27 +1259,24 @@ def new_orders(cfg, token):
 LAST_END_PAGES = 0
 
 
-def make_pdf(cfg, token, orders, prefix, progress=None, end_sheet=False, split=False):
+def make_pdf(cfg, token, orders, prefix, progress=None, end_sheet=False, split=False, reverse=False):
+    """주문서 PDF. split: 스마트스토어 쪽을 앞으로(출력 기록 순서도 이 순서).
+    reverse: 인쇄할 때만 주문 순서를 거꾸로 — 주문서를 자르고 스테이플러로 찍어 옆에 쌓으면 다시 바른 순서가 됨.
+    (한 주문 안의 장 순서는 그대로, 출력 기록·택배·라벨 순서는 그대로)"""
     verify_orders(orders, "주문서 만들기")
     sheet = setup_fonts(cfg)
     images = fetch_images(cfg, token, orders)
-    divider = None
     if split:
         smart, rest = split_orders(orders)
         if smart and rest:
             orders[:] = smart + rest            # 스마트스토어 쪽을 맨 앞으로 (출력 기록도 이 순서)
-            divider = {"index": len(smart), "smart": len(smart), "rest": len(rest)}
     views = [sheet.to_view(o, images) for o in orders]
+    if reverse:
+        views = views[::-1]
     pdf = PDF_DIR / f"{prefix}_{dt.datetime.now():%Y%m%d_%H%M%S}.pdf"
-    end_info = None
-    if end_sheet:     # 자동 출력: 주문서 장 수를 먼저 알아낸 뒤 맨 뒤에 출력 확인 용지
-        pages0 = sheet.build_orders_pdf(views, pdf, None, None, divider)
-        now = dt.datetime.now()
-        end_info = {"when": f"{now:%m/%d}({'월화수목금토일'[now.weekday()]}) {now:%H:%M}",
-                    "count": len(orders), "pages": pages0, "orders": [order_brief(o) for o in orders]}
-    pages = sheet.build_orders_pdf(views, pdf, progress, end_info, divider)
+    pages = sheet.build_orders_pdf(views, pdf, progress)
     global LAST_END_PAGES
-    LAST_END_PAGES = pages - end_info["pages"] if end_info else 0      # 출력 확인 용지 장 수
+    LAST_END_PAGES = 0
     log.info(f"PDF 생성: {pdf.name} ({len(orders)}건, {pages}장)")
     return pdf, pages
 
@@ -1288,7 +1285,8 @@ def print_orders(cfg, token, orders, kind, progress=None, record=True, end_sheet
     """주문서 만들기 → 인쇄 → (record면) 중복 방지 기록 → 출력 기록 추가"""
     verify_orders(orders, "주문서 인쇄")
     orders = list(orders)
-    pdf, pages = make_pdf(cfg, token, orders, "주문서" if record else "다시뽑기", progress, end_sheet, split)
+    pdf, pages = make_pdf(cfg, token, orders, "주문서" if record else "다시뽑기", progress, False, split,
+                          reverse=sch.load_settings().get("print_reverse", True))
     if stage:
         stage("인쇄 중", pdf=str(pdf), pages=pages)
     print_pdf(cfg, pdf)
@@ -1714,6 +1712,7 @@ def watch_print_job(cfg, pdf, pages, stage=None):
            "[pscustomobject]@{S=\"$($p.PrinterStatus)\"; J=$j} | ConvertTo-Json -Depth 3 -Compress")
     stem = Path(pdf).stem
     issues, gone_count, last_prog = [], 0, ""
+    t_start = time.time()
     deadline = time.time() + min(max(180, pages * 10), 1500)
     while time.time() < deadline:
         check_stop()
@@ -1724,7 +1723,11 @@ def watch_print_job(cfg, pdf, pages, stage=None):
         pst = str(data.get("S") or "")
         jobs = data.get("J") or []
         jobs = jobs if isinstance(jobs, list) else [jobs]
-        mine = [j for j in jobs if stem in str(j.get("DocumentName") or "") or "주문서" in str(j.get("DocumentName") or "")]
+        # 이번에 보낸 PDF와 이름이 같은 문서만 (예전에 남아 있는 다른 주문서 문서는 무시)
+        mine = [j for j in jobs if stem in str(j.get("DocumentName") or "")]
+        # '프린터로 보냄(Complete)'·'인쇄됨(Printed)'·'삭제됨'은 컴퓨터가 프린터에 다 넘겨준 것 → 끝난 것으로
+        sent = [j for j in mine if any(k in str(j.get("St") or "") for k in ("Complete", "Printed", "Deleted"))]
+        mine = [j for j in mine if j not in sent]
         for key, ko in _PRINTER_PROBLEMS.items():
             if key in pst or any(key in str(j.get("St") or "") for j in mine):
                 if ko not in issues:
@@ -1739,9 +1742,12 @@ def watch_print_job(cfg, pdf, pages, stage=None):
         else:
             gone_count += 1
             if gone_count >= 2 and not any(k in pst for k in _PRINTER_PROBLEMS):
-                note = "인쇄 대기열을 모두 보냄" + (" (중간에 문제가 있었지만 이어서 인쇄됨)" if issues else "")
+                note = ("프린터로 모두 보냄" if sent else "인쇄 대기열을 모두 보냄") + \
+                       (" (중간에 문제가 있었지만 이어서 인쇄됨)" if issues else "")
+                log.info(f"[프린터 감시] 끝: {note} ({time.time() - t_start:.0f}초)")
                 return {"state": "problem" if issues else "ok", "issues": issues, "note": note}
         time.sleep(5)
+    log.warning(f"[프린터 감시] 시간 안에 끝나지 않음: 마지막 확인 {last_prog}, 프린터 상태 '{pst}'")
     return {"state": "problem", "issues": issues or ["인쇄가 끝나지 않음"],
             "note": f"시간 안에 인쇄가 끝나지 않았습니다 (마지막 확인 {last_prog})"}
 

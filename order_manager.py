@@ -493,6 +493,7 @@ class App(tk.Tk):
             self.result_pill.pack_forget()
             return
         slot, res = str(st["started"])[11:16], st.get("result")
+        acked = bool(st.get("acknowledged"))       # 결과 창이나 경고 띠에서 [확인]을 눌렀으면 경고는 다시 띄우지 않음
         if not st.get("final"):
             text, on = f"{slot} 자동 출력 진행 중", True
         elif res in ("ok", "unknown"):
@@ -501,12 +502,14 @@ class App(tk.Tk):
             text, on = f"오늘 {slot} 자동 출력 · 새 주문 없음", False
         elif res == "stopped":
             text, on = f"오늘 {slot} 자동 출력 중지됨", False
-            self._alerts["auto"] = (f"[자동 출력 중지] {slot} 출력을 중지했습니다 · 이번 주문 {st.get('count', 0)}건은 다음 출력에 다시 나옵니다"
-                                    if st.get("count") else f"[자동 출력 중지] {slot} 출력을 중지했습니다")
+            if not acked:
+                self._alerts["auto"] = (f"[자동 출력 중지] {slot} 출력을 중지했습니다 · 이번 주문 {st.get('count', 0)}건은 다음 출력에 다시 나옵니다"
+                                        if st.get("count") else f"[자동 출력 중지] {slot} 출력을 중지했습니다")
         else:
-            text, on = f"오늘 {slot} 자동 출력 확인 필요", False
+            text, on = (f"오늘 {slot} 자동 출력 · 확인함" if acked else f"오늘 {slot} 자동 출력 확인 필요"), False
             detail = ", ".join(st.get("printer_issues") or []) or str(st.get("message", "")).splitlines()[0][:60]
-            self._alerts["auto"] = f"[자동 출력] {slot} 출력에 문제가 있었습니다: {detail} — '출력 확인 용지'가 나왔는지 확인하세요"
+            if not acked:
+                self._alerts["auto"] = f"[자동 출력] {slot} 출력에 문제가 있었습니다: {detail} — 주문서가 모두 나왔는지 확인하세요"
         self.result_pill.configure(text=f" {text} ", bg=T.GREEN_L if on else "#FDEBEC" if res in ("problem", "fail")
                                    else "#FFF1E6" if res == "stopped" else "#EFEFEC",
                                    fg=T.GREEN_D if on else T.RED if res in ("problem", "fail")
@@ -517,8 +520,16 @@ class App(tk.Tk):
     def _render_alerts(self):
         for w in self.alert_fr.winfo_children():
             w.destroy()
-        for msg in self._alerts.values():
-            T.alert(self.alert_fr, msg).pack(fill="x", pady=(0, 6))
+        for key, msg in self._alerts.items():
+            T.alert(self.alert_fr, msg, on_close=self._ack_auto if key == "auto" else None).pack(fill="x", pady=(0, 6))
+
+    def _ack_auto(self):
+        """자동 출력 경고 [확인 ✕]: 확인했다고 기록하고 경고를 닫음"""
+        st = op.read_json(op.AUTO_STATUS_FILE, {})
+        st["acknowledged"] = dt.datetime.now().isoformat(timespec="seconds")
+        op.write_json(op.AUTO_STATUS_FILE, st)
+        op.log.info("[자동 출력] 경고 확인함")
+        self._show_auto_result()
 
     def toggle_split(self):
         op.set_split_today(self.split_var.get())
@@ -531,7 +542,7 @@ class App(tk.Tk):
         on = op.split_on()
         self.split_var.set(on)
         self.split_lb.configure(text=("켜짐: 지금 출력·자동 출력·택배 파일·라벨에서 스마트스토어 쪽(그 고객의 다른 경로 주문 포함)이 "
-                                      "맨 앞에 모이고, 주문서 사이에 구분 용지가 들어갑니다." if on else
+                                      "한데 모여 나옵니다." if on else
                                       "꺼짐: 평소처럼 결제시각 순서대로. 요일 기본값은 자동 출력 설정 탭에서 정합니다.")
                                  + "\n아래 버튼은 스위치와 상관없이 이번 한 번만 나눠서 인쇄합니다.")
 
@@ -865,7 +876,7 @@ class App(tk.Tk):
             what = "새 주문"
             if split:
                 smart, rest = op.split_orders(orders)
-                what = f"새 주문 (스마트스토어 쪽 {len(smart)}건 먼저 → 구분 용지 → 나머지 {len(rest)}건)"
+                what = f"새 주문 (스마트스토어 쪽 {len(smart)}건 · 나머지 {len(rest)}건, 스마트스토어 쪽이 한데 모여 나옴)"
             if not self._confirm_print(orders, what):
                 return
 
