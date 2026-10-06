@@ -163,9 +163,9 @@ class Notice(tk.Tk):
         elif res in ("ok", "unknown"):
             self._dot(T.GREEN)
             self.title_lb.configure(text=f"✓ {slot} 자동 출력 완료")
-            self.body.configure(text=f"주문 {st.get('count', 0)}건 · 주문서 {st.get('pages', '?')}장 + 출력 확인 용지 {st.get('end_pages', 1)}장\n"
+            self.body.configure(text=f"주문 {st.get('count', 0)}건 · 주문서 {st.get('pages', '?')}장\n"
                                      f"({st.get('breakdown', '')})\n마지막 주문: {last.get('order_id', '')}  {last.get('receiver') or last.get('buyer', '')}")
-            self.hint.configure(text="프린터에서 맨 마지막 '출력 확인 용지'가 나왔는지 확인하세요. 나왔다면 모두 인쇄된 것입니다."
+            self.hint.configure(text="프린터에서 주문서가 모두 나왔는지 장 수를 확인하세요."
                                      + ("\n(이 프린터는 상태를 알려주지 않아 인쇄 완료를 직접 확인하지 못했습니다)" if res == "unknown" else ""))
         elif res == "problem":
             self._dot(T.RED)
@@ -174,7 +174,7 @@ class Notice(tk.Tk):
             self.body.configure(text=f"프린터 문제: {issues or '알 수 없음'}\n주문 {st.get('count', 0)}건 · {st.get('pages', '?')}장\n"
                                      f"{st.get('printer_note', '')}")
             self.hint.configure(text="종이를 채우거나 걸린 종이를 빼면 대부분 멈춘 곳부터 이어서 인쇄됩니다. "
-                                     "'출력 확인 용지'가 끝내 안 나오면 [이 묶음 다시 뽑기]를 누르세요.")
+                                     "끝내 다 나오지 않으면 [이 묶음 다시 뽑기]를 누르세요.")
             if st.get("pdf") and Path(st["pdf"]).exists():
                 self.b_reprint.pack(side="right", padx=6)
         elif res == "stopped":
@@ -232,7 +232,7 @@ class Notice(tk.Tk):
                 import order_print as op
                 op.print_pdf(op.load_config(), st["pdf"])
                 op.log.info(f"[결과 창] 자동 출력 묶음 다시 뽑기: {Path(st['pdf']).name}")
-                msg = "다시 인쇄를 보냈습니다. '출력 확인 용지'까지 나오는지 확인하세요."
+                msg = "다시 인쇄를 보냈습니다. 주문서가 모두 나오는지 확인하세요."
             except Exception as e:
                 msg = f"다시 뽑기 실패: {e}"
             self.after(0, lambda: self.hint.configure(text=msg))

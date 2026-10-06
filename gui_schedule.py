@@ -62,7 +62,7 @@ class ScheduleTab(ttk.Frame):
         spf = ttk.LabelFrame(left, text=" 스마트스토어 따로 작업 (요일 기본값) ", padding=10)
         spf.grid(row=7, column=0, sticky="we", pady=(10, 0))
         hint(spf, "체크한 요일에는 자동 출력·지금 출력·택배 파일·라벨에서 스마트스토어 쪽 주문이 맨 앞에 모이고, 주문서 사이에 "
-                  "'여기까지 스마트스토어' 구분 용지가 들어갑니다. 그날그날은 출력 탭의 스위치로 바꿀 수 있습니다.",
+                  "스마트스토어 쪽 주문서가 한데 모여 나옵니다. 그날그날은 출력 탭의 스위치로 바꿀 수 있습니다.",
              row=0, column=0, columnspan=7, sticky="w", pady=(0, 6))
         self.split_days = []
         sd = self.s.get("smart_split_weekdays", {})

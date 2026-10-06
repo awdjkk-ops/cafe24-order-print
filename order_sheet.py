@@ -105,9 +105,13 @@ QTY_COL_W = 7 * mm          # 수량 칸 폭 (양식 그대로)
 QTY_EMPH = 8.3              # 2개 이상 주문한 상품의 수량 글자 크기 (기본 6.3 + 2pt, 굵게)
 
 
-NAME_PAD = 2 * mm                       # 상품명 글자와 칸 테두리 사이 (굵은 펜으로 칸을 체크해도 글자가 안 가려지게)
+NAME_COL_W = 61 * mm                    # 상품명/옵션 칸 폭
+BLANK_COL_W = 15 * mm                   # 수량과 판매가 사이 빈칸 (펜으로 체크)
+STATUS_COL_W = 13 * mm                  # 주문상태 칸 폭
+NAME_PAD = 2 * mm                       # 상품명 글자와 칸 테두리 사이 — 좌우
+NAME_PAD_V = 1.5 * mm                   # 상품명 글자와 칸 테두리 사이 — 위아래                       # 상품명 글자와 칸 테두리 사이 (굵은 펜으로 칸을 체크해도 글자가 안 가려지게)
 MARKER = colors.HexColor("#FFF29A")    # 형광펜 (연한 노랑)
-MARKER_H = 3.4 * mm                     # 형광펜 굵기 (글자 한 줄)
+MARKER_H = 5.1 * mm                     # 형광펜 굵기
 
 
 class _Marker(Flowable):
@@ -325,8 +329,9 @@ def _story(v, highlight=False):
 
     # 주문내역
     story += [P(f"주문내역({len(v['items'])} 건)", S_H), Spacer(1, 1.2 * mm)]
-    w = [9.5 * mm, 70 * mm, QTY_COL_W, 11.5 * mm, 13.5 * mm, 19 * mm]      # 배송비·운송장번호 칸을 빼고 상품명 칸을 넓힘
-    rows = [[P("상품명/옵션", S_C), "", P("수량", S_C), P("판매가", S_C), P("상품구매금액", S_C),
+    # 사진 · 상품명 · 수량 · 빈칸(펜으로 체크하는 칸) · 판매가 · 상품구매금액 · 주문상태  (전체 폭은 예전과 같음)
+    w = [9.5 * mm, NAME_COL_W, QTY_COL_W, BLANK_COL_W, 11.5 * mm, 13.5 * mm, STATUS_COL_W]
+    rows = [[P("상품명/옵션", S_C), "", P("수량", S_C), "", P("판매가", S_C), P("상품구매금액", S_C),
              P("주문상태", S_C)]]
     tq = tu = ta = 0
     pay_badge = (icon_img("NCHECKOUT", 7) + " ") if v["place"] == "NCHECKOUT" else ""
@@ -346,9 +351,9 @@ def _story(v, highlight=False):
         name_cell = P(name)
         if highlight and it["qty"] >= 2:                  # 오른쪽 주문서: 2개 이상 상품에 형광펜
             name_cell = _Marker(name_cell, str(it["qty"]), qty_size(it["qty"]))
-        rows.append([img, name_cell, qty_para(it["qty"]), P(won(it["unit"]), S_R), P(won(it["amount"]), S_R),
+        rows.append([img, name_cell, qty_para(it["qty"]), "", P(won(it["unit"]), S_R), P(won(it["amount"]), S_R),
                      P(status, S_C)])
-    rows.append([P("계", S_C), "", P(str(tq), S_C), P(won(tu), S_R), P(won(ta), S_R), ""])
+    rows.append([P("계", S_C), "", P(str(tq), S_C), "", P(won(tu), S_R), P(won(ta), S_R), ""])
     t = Table(rows, colWidths=w, repeatRows=1)
     t.setStyle(TableStyle([
         ("GRID", (0, 0), (-1, -1), 0.4, GRID), ("BACKGROUND", (0, 0), (-1, 0), LABEL_BG),
@@ -357,7 +362,7 @@ def _story(v, highlight=False):
         ("TOPPADDING", (0, 0), (-1, -1), 1.1), ("BOTTOMPADDING", (0, 0), (-1, -1), 1.1),
         ("LEFTPADDING", (0, 0), (-1, -1), 2), ("RIGHTPADDING", (0, 0), (-1, -1), 2),
         # 상품명 칸만 안쪽 여백 2mm (글자 크기는 그대로)
-        ("TOPPADDING", (1, 1), (1, -2), NAME_PAD), ("BOTTOMPADDING", (1, 1), (1, -2), NAME_PAD),
+        ("TOPPADDING", (1, 1), (1, -2), NAME_PAD_V), ("BOTTOMPADDING", (1, 1), (1, -2), NAME_PAD_V),
         ("LEFTPADDING", (1, 1), (1, -2), NAME_PAD), ("RIGHTPADDING", (1, 1), (1, -2), NAME_PAD),
     ]))
     story += [t, Spacer(1, 3 * mm)]
