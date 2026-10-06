@@ -105,6 +105,7 @@ QTY_COL_W = 7 * mm          # 수량 칸 폭 (양식 그대로)
 QTY_EMPH = 8.3              # 2개 이상 주문한 상품의 수량 글자 크기 (기본 6.3 + 2pt, 굵게)
 
 
+NAME_PAD = 2 * mm                       # 상품명 글자와 칸 테두리 사이 (굵은 펜으로 칸을 체크해도 글자가 안 가려지게)
 MARKER = colors.HexColor("#FFF29A")    # 형광펜 (연한 노랑)
 MARKER_H = 3.4 * mm                     # 형광펜 굵기 (글자 한 줄)
 
@@ -126,8 +127,8 @@ class _Marker(Flowable):
         from reportlab.pdfbase.pdfmetrics import stringWidth
         c = self.canv
         num_w = stringWidth(self.qty_text, "KRB", self.qty_size)
-        # 이 칸 오른쪽 여백(2) + 수량 칸 왼쪽 여백(2) + 수량 칸 가운데까지 + 숫자 절반 + 여유
-        extend = 2 + 2 + (QTY_COL_W - 4) / 2 + num_w / 2 + 1.5
+        # 이 칸 오른쪽 여백 + 수량 칸 왼쪽 여백(2) + 수량 칸 가운데까지 + 숫자 절반 + 여유
+        extend = NAME_PAD + 2 + (QTY_COL_W - 4) / 2 + num_w / 2 + 1.5
         y = (self.h - MARKER_H) / 2
         c.saveState()
         c.setFillColor(MARKER)
@@ -324,9 +325,9 @@ def _story(v, highlight=False):
 
     # 주문내역
     story += [P(f"주문내역({len(v['items'])} 건)", S_H), Spacer(1, 1.2 * mm)]
-    w = [9.5 * mm, 49 * mm, QTY_COL_W, 11.5 * mm, 13.5 * mm, 10 * mm, 11 * mm, 19 * mm]
+    w = [9.5 * mm, 70 * mm, QTY_COL_W, 11.5 * mm, 13.5 * mm, 19 * mm]      # 배송비·운송장번호 칸을 빼고 상품명 칸을 넓힘
     rows = [[P("상품명/옵션", S_C), "", P("수량", S_C), P("판매가", S_C), P("상품구매금액", S_C),
-             P("배송비", S_C), P("운송장번호", S_C), P("주문상태", S_C)]]
+             P("주문상태", S_C)]]
     tq = tu = ta = 0
     pay_badge = (icon_img("NCHECKOUT", 7) + " ") if v["place"] == "NCHECKOUT" else ""
     for it in v["items"]:
@@ -346,17 +347,18 @@ def _story(v, highlight=False):
         if highlight and it["qty"] >= 2:                  # 오른쪽 주문서: 2개 이상 상품에 형광펜
             name_cell = _Marker(name_cell, str(it["qty"]), qty_size(it["qty"]))
         rows.append([img, name_cell, qty_para(it["qty"]), P(won(it["unit"]), S_R), P(won(it["amount"]), S_R),
-                     P(f'({E(it["ship_type"][:2])})<br/>{won(fee)}' + ("<br/>(무료)" if not fee else ""), S_C),
-                     P(E(it["tracking"]), S_C), P(status, S_C)])
-    rows.append([P("계", S_C), "", P(str(tq), S_C), P(won(tu), S_R), P(won(ta), S_R),
-                 P(won(v["shipping_fee"]), S_C), "", ""])
+                     P(status, S_C)])
+    rows.append([P("계", S_C), "", P(str(tq), S_C), P(won(tu), S_R), P(won(ta), S_R), ""])
     t = Table(rows, colWidths=w, repeatRows=1)
     t.setStyle(TableStyle([
         ("GRID", (0, 0), (-1, -1), 0.4, GRID), ("BACKGROUND", (0, 0), (-1, 0), LABEL_BG),
-        ("SPAN", (0, 0), (1, 0)), ("SPAN", (0, -1), (1, -1)), ("SPAN", (5, -1), (-1, -1)),
+        ("SPAN", (0, 0), (1, 0)), ("SPAN", (0, -1), (1, -1)),
         ("BACKGROUND", (0, -1), (-1, -1), LABEL_BG), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("TOPPADDING", (0, 0), (-1, -1), 1.1), ("BOTTOMPADDING", (0, 0), (-1, -1), 1.1),
         ("LEFTPADDING", (0, 0), (-1, -1), 2), ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+        # 상품명 칸만 안쪽 여백 2mm (글자 크기는 그대로)
+        ("TOPPADDING", (1, 1), (1, -2), NAME_PAD), ("BOTTOMPADDING", (1, 1), (1, -2), NAME_PAD),
+        ("LEFTPADDING", (1, 1), (1, -2), NAME_PAD), ("RIGHTPADDING", (1, 1), (1, -2), NAME_PAD),
     ]))
     story += [t, Spacer(1, 3 * mm)]
 
