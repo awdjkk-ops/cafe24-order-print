@@ -40,15 +40,19 @@ def build_sequence(rows):
 
 
 def yellow_keys(rows):
-    """묶음배송(같은 사람 이름+주소가 주문 2건 이상)의 이름 칸 색: {고객: 색}
-    노랑이 기본, 묶음 안에 스마트스토어 주문이 하나라도 있으면 연한 초록."""
+    """이름 칸 색: {고객(이름+주소): 색}
+    - 그 고객의 주문 중에 스마트스토어 주문이 하나라도 있으면 연한 초록 (묶음배송이든 아니든)
+    - 스마트스토어 없이 묶음배송(주문 2건 이상)이면 노랑
+    - 나머지는 분홍 (여기에 없음)"""
     by, smart = {}, set()
     for r in rows:
         k = _t(r, "수령인") + "||" + _t(r, "주소")
         by.setdefault(k, set()).add(_t(r, "주문번호"))
         if r.get("_place") == "shopn":
             smart.add(k)
-    return {k: (GREEN if k in smart else YELLOW) for k, v in by.items() if len(v) >= 2}
+    out = {k: YELLOW for k, v in by.items() if len(v) >= 2}
+    out.update({k: GREEN for k in smart})
+    return out
 
 
 def name_color(item, ykeys):

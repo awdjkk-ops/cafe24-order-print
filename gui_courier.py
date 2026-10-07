@@ -236,8 +236,8 @@ class CourierTab(ttk.Frame):
                 messagebox.showwarning("블랙리스트·경계대상 발견", r["texts"]["블랙리스트·경계대상"])
             if r["popup"]:
                 messagebox.showinfo("확인해 주세요", r["popup"])
-            if r["path"]:
-                op.open_file(op.COURIER_DIR)
+            if r["path"]:                                   # 폴더는 열지 않음 (필요하면 [만든 파일 열기]·[폴더 열기])
+                self.app.flash(f"택배 파일을 만들었습니다: {Path(r['path']).name}")
             self.refresh()
             self.app.refresh_status()
         self.app.bg(work, done, "카페24에서 주문 불러오는 중...", progress=True)

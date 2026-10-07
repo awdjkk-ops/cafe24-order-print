@@ -43,7 +43,7 @@ class LabelTab(ttk.Frame):
         hint(tf, "택배 탭에서 택배 파일을 만들거나 미리 확인하면 그 주문으로 라벨이 준비됩니다. "
                  "예전 택배 파일을 고르면 그 주문으로 바뀝니다.", row=2, column=0, sticky="w", pady=(6, 0), wrap=280)
         lg = ttk.Frame(tf); lg.grid(row=3, column=0, sticky="w", pady=(8, 0))
-        for color, text in (("#FFC0CB", "일반"), ("#FFFF00", "묶음배송"), ("#B7E4B0", "스마트스토어 묶음배송")):
+        for color, text in (("#FFC0CB", "일반"), ("#FFFF00", "묶음배송"), ("#B7E4B0", "스마트스토어")):
             tk.Label(lg, text="  ", bg=color, relief="solid", bd=1).pack(side="left")
             ttk.Label(lg, text=f" {text}  ", style="Hint.TLabel").pack(side="left")
         self.split_new_page = tk.BooleanVar(value=True)
