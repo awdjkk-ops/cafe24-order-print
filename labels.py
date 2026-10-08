@@ -69,6 +69,27 @@ def split_break(rows):
     return len(build_sequence(smart))
 
 
+def number(seq):
+    """라벨마다 원래 순번(_i)을 붙임 — 지우기·되돌리기에 씀"""
+    for i, it in enumerate(seq):
+        it["_i"] = i
+    return seq
+
+
+def drop_removed(seq, removed=(), break_at=None):
+    """지운 라벨을 빼고 뒤의 라벨을 당겨 채움. 색은 라벨마다 붙어 있어서 칸을 옮겨도 원래 색 그대로.
+    break_at(스마트스토어 다음 새 장)도 앞쪽에서 지운 만큼 당김. 돌려줌: (남은 라벨, 새 break_at)"""
+    removed = set(removed or ())
+    if not removed:
+        return seq, break_at
+    out = [it for i, it in enumerate(seq) if i not in removed]
+    if break_at:
+        break_at -= sum(1 for i in removed if i < break_at)
+        if break_at <= 0 or break_at >= len(out):
+            break_at = None
+    return out, break_at
+
+
 def paginate(seq, used_by_page=None, break_at=None):
     """페이지별 사용한 칸(1~145)을 건너뛰고 채움. 칸 번호는 위→아래, 왼쪽 줄부터.
     break_at: 이 순번의 라벨부터는 새 장에서 시작 (스마트스토어 다음 나머지)"""

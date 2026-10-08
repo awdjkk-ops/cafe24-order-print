@@ -589,12 +589,14 @@ def _label_fonts(cfg):
     return cfg.get("font_path"), cfg.get("font_bold_path")
 
 
-def make_labels(cfg, rows, used=None, kind="pdf", new_page_after_smart=False):
-    """rows(카페24 엑셀 형식 줄) → 라벨 PDF(바로 인쇄용) 또는 엑셀. (경로, 라벨 칸 수, 장 수)"""
+def make_labels(cfg, rows, used=None, kind="pdf", new_page_after_smart=False, removed=None):
+    """rows(카페24 엑셀 형식 줄) → 라벨 PDF(바로 인쇄용) 또는 엑셀. (경로, 라벨 칸 수, 장 수)
+    removed: 라벨 탭에서 지운 라벨의 원래 순번들 (이번 인쇄에만 적용)"""
     import labels as L
     seq = L.build_sequence(rows)
     ykeys = L.yellow_keys(rows)
-    pages = L.paginate(seq, used or {}, L.split_break(rows) if new_page_after_smart else None)
+    seq, brk = L.drop_removed(seq, removed, L.split_break(rows) if new_page_after_smart else None)
+    pages = L.paginate(seq, used or {}, brk)
     stamp = dt.datetime.now().strftime("%Y-%m-%d_%H%M")
     if kind == "xlsx":
         path = COURIER_DIR / f"라벨_{stamp}.xlsx"

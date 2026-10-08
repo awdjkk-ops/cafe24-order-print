@@ -23,6 +23,7 @@ class LabelTab(ttk.Frame):
         self.ids = None            # (예전 택배 파일) 줄이 아직 없을 때 불러올 주문번호
         self.title = ""
         self.used = {}             # {페이지: {칸번호}}
+        self.removed = []          # 지운 라벨의 원래 순번 (지운 순서대로 — 되돌리기는 뒤에서부터)
         self.page = 0
         self.drag = None           # 드래그 중 칠할 상태 (True=사용함)
         self.last_click = None     # Shift+클릭 기준 (페이지, 칸)
@@ -64,12 +65,14 @@ class LabelTab(ttk.Frame):
         kf = ttk.LabelFrame(left, text=" 사용한 칸 지정 방법 ", padding=10); kf.grid(row=2, column=0, sticky="we", pady=(10, 0))
         for i, (k, v) in enumerate((("클릭", "그 칸을 사용함 / 다시 누르면 해제"),
                                     ("드래그", "지나가는 칸을 한 번에 칠하기"),
-                                    ("Shift + 클릭", "마지막으로 클릭한 칸부터 여기까지 전부 사용함"))):
+                                    ("Shift + 클릭", "마지막으로 클릭한 칸부터 여기까지 전부 사용함"),
+                                    ("오른쪽 클릭", "그 라벨 지우기 (뒤의 라벨이 당겨져 채워짐)"))):
             ttk.Label(kf, text=k, font=T.f(9, True), width=11).grid(row=i, column=0, sticky="nw", pady=1)
             ttk.Label(kf, text=v, wraplength=180, justify="left").grid(row=i, column=1, sticky="w", pady=1)
         hint(kf, "회색 칸은 건너뛰고 위→아래, 왼쪽 줄부터 채워집니다. 페이지마다 따로 지정할 수 있고, "
-                 "지정은 이번 인쇄에만 적용됩니다.", row=3, column=0, columnspan=2, sticky="w", pady=(6, 0), wrap=280)
-        ttk.Button(kf, text="모든 페이지 초기화", command=self.reset_all).grid(row=4, column=0, columnspan=2, sticky="w", pady=(6, 0))
+                 "지정과 지우기는 이번 인쇄에만 적용됩니다 (택배 파일에는 영향 없음).",
+             row=4, column=0, columnspan=2, sticky="w", pady=(6, 0), wrap=280)
+        ttk.Button(kf, text="모든 페이지 초기화", command=self.reset_all).grid(row=5, column=0, columnspan=2, sticky="w", pady=(6, 0))
 
         # ---- 오른쪽: 미리보기
         nav = ttk.Frame(right, style="Page.TFrame"); nav.grid(row=0, column=0, sticky="we")
@@ -87,9 +90,17 @@ class LabelTab(ttk.Frame):
         self.cv.bind("<Button-1>", self.press)
         self.cv.bind("<B1-Motion>", self.motion)
         self.cv.bind("<ButtonRelease-1>", self.release)
+        self.cv.bind("<Button-3>", self.right_click)
+        self.menu = tk.Menu(self, tearoff=0, font=T.f(10))
         bot = ttk.Frame(right, style="Page.TFrame"); bot.grid(row=2, column=0, sticky="we")
         self.info_lb = ttk.Label(bot, text="", style="Page.TLabel"); self.info_lb.pack(side="left")
         ttk.Button(bot, text="이 페이지 초기화", style="Page.TButton", command=self.reset_page).pack(side="right")
+        rb = ttk.Frame(right, style="Page.TFrame"); rb.grid(row=3, column=0, sticky="we", pady=(6, 0))
+        self.removed_lb = ttk.Label(rb, text="", style="Page.TLabel", foreground=T.ORANGE); self.removed_lb.pack(side="left")
+        self.b_restore = ttk.Button(rb, text="지운 항목 모두 복원", style="Page.TButton", command=self.restore_all)
+        self.b_restore.pack(side="right")
+        self.b_undo = ttk.Button(rb, text="되돌리기", style="Page.TButton", command=self.undo_remove)
+        self.b_undo.pack(side="right", padx=(0, 6))
         from gui_courier import SplitBadge, put_on_top
         self.split_badge = SplitBadge(pf, app, wrap=280)
         put_on_top(pf, self.split_badge)
@@ -100,6 +111,7 @@ class LabelTab(ttk.Frame):
     def set_target(self, rows=None, ids=None, title="", split_n=0):
         self.rows, self.ids, self.title, self.split_n = rows, ids, title, split_n
         self.used, self.page, self.last_click = {}, 0, None
+        self.removed = []
         self.draw()
 
     def _break_at(self):
@@ -135,7 +147,8 @@ class LabelTab(ttk.Frame):
     def _pages(self):
         if self.rows is None:
             return None
-        return L.paginate(L.build_sequence(self.rows), self.used, self._break_at())
+        seq, brk = L.drop_removed(L.number(L.build_sequence(self.rows)), self.removed, self._break_at())
+        return L.paginate(seq, self.used, brk)
 
     def _cut(self, text, font, width):
         if font.measure(text) <= width:
@@ -174,7 +187,14 @@ class LabelTab(ttk.Frame):
         used = self.used.get(self.page, set())
         self.target_lb.configure(text=self.title)
         n_used = sum(len(v) for v in self.used.values())
-        self.count_lb.configure(text=f"라벨 {len(seq)}칸 · {len(pages)}장" + (f" · 사용함 표시 {n_used}칸" if n_used else ""))
+        n_left = len(seq) - len(self.removed)
+        last_n = sum(1 for x in pages[-1] if x is not None)
+        save = f"\n마지막 장 {last_n}칸 사용 · {last_n}칸 지우면 {len(pages) - 1}장으로 줄어요" if len(pages) > 1 and last_n <= 10 else ""
+        self.count_lb.configure(text=f"라벨 {n_left}칸 · {len(pages)}장" + (f" · 사용함 표시 {n_used}칸" if n_used else "")
+                                + (f" · 지운 항목 {len(self.removed)}개" if self.removed else "") + save)
+        self.removed_lb.configure(text=f"지운 항목 {len(self.removed)}개" if self.removed else "오른쪽 클릭으로 라벨을 지울 수 있습니다")
+        for b in (self.b_undo, self.b_restore):
+            b.state(["!disabled"] if self.removed else ["disabled"])
         self.page_lb.configure(text=f"페이지 {self.page + 1} / {len(pages)}")
         states = [self.page > 0, self.page > 0, self.page < len(pages) - 1, self.page < len(pages) - 1]
         for b, ok in zip(self.nav_btns, states):
@@ -209,6 +229,37 @@ class LabelTab(ttk.Frame):
                     cv.create_text(x + CELL_W / 2, y + CELL_H / 2 - 1, text=self._cut(it["line1"], self.f_txt, CELL_W - 8),
                                    font=self.f_txt, tags=tag)
         self.info_lb.configure(text=f"이 페이지에서 {len(used)}칸 사용됨으로 표시됨" if used else "이 페이지는 전체 칸 사용 가능")
+
+    # ------------------------------------------------------------ 지우기·되돌리기
+    def right_click(self, e):
+        if self.rows is None:
+            return
+        slot = self._slot_at(e.x, e.y)
+        pages = self._pages()
+        if slot is None or not pages:
+            return
+        it = pages[self.page][slot - 1]
+        if it is None:
+            return
+        name = it["text"] if it["type"] == "NAME" else it["line1"]
+        what = "이름 칸" if it["type"] == "NAME" else "라벨"
+        self.menu.delete(0, "end")
+        self.menu.add_command(label=f"이 {what} 지우기 — {name[:24]}", command=lambda i=it["_i"]: self.remove(i))
+        self.menu.tk_popup(e.x_root, e.y_root)
+
+    def remove(self, i):
+        self.removed.append(i)
+        self.draw()
+
+    def undo_remove(self):
+        if self.removed:
+            self.removed.pop()
+            self.draw()
+
+    def restore_all(self):
+        if self.removed:
+            self.removed = []
+            self.draw()
 
     # ------------------------------------------------------------ 조작 (웹 도구와 같음)
     def _slot_at(self, x, y):
@@ -286,7 +337,8 @@ class LabelTab(ttk.Frame):
         def go():
             pages = len(self._pages())
             dialog = kind == "pdf" and (self.app.cfg or {}).get("label_print_dialog", True)
-            msg = f"라벨 {pages}장을 인쇄할까요?\n뒷면 트레이에 라벨지(폼텍 LS-3145)를 넣었는지 확인해 주세요."
+            msg = f"라벨 {pages}장을 인쇄할까요?" + (f" (지운 항목 {len(self.removed)}개 빼고)" if self.removed else "") + \
+                  "\n뒷면 트레이에 라벨지(폼텍 LS-3145)를 넣었는지 확인해 주세요."
             if dialog:
                 msg += "\n\n인쇄 창이 뜨면: 프린터 선택 → [기본 설정]에서 급지를 '뒷면 트레이'로 → 인쇄"
             if kind == "pdf" and not messagebox.askyesno("라벨 인쇄", msg):
@@ -294,7 +346,7 @@ class LabelTab(ttk.Frame):
 
             def work():
                 path, n, pg = op.make_labels(self.app.cfg, self.rows, self.used, kind,
-                                             self._break_at() is not None)
+                                             self._break_at() is not None, list(self.removed))
                 if kind == "pdf":
                     op.print_pdf(self.app.cfg, path, exact=True)
                 return path, n, pg
