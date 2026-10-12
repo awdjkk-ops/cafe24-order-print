@@ -255,7 +255,8 @@ class LabelTab(ttk.Frame):
             elif it["type"] == "NAME":
                 color = "#" + L.name_color(it, ykeys)[2:]
                 cv.create_rectangle(x, y, x + CELL_W, y + CELL_H - 2, fill=color, outline=BORDER, tags=tag)
-                cv.create_text(x + CELL_W / 2, y + CELL_H / 2 - 1, text=self._cut(it["text"], self.f_name, CELL_W - 8),
+                cv.create_text(x + CELL_W / 2, y + CELL_H / 2 - 1, text=L.name_text(it, self.f_name.measure, CELL_W - 8) if it.get("n", 1) >= 2
+                               else self._cut(it["text"], self.f_name, CELL_W - 8),
                                font=self.f_name, tags=tag)
             else:
                 cv.create_rectangle(x, y, x + CELL_W, y + CELL_H - 2, fill="white", outline=BORDER, tags=tag)

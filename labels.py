@@ -28,15 +28,36 @@ def _t(r, k):
 def build_sequence(rows):
     """원본 줄(상품 단위) → 라벨 순서. 수령인(이름+주소)이나 주문번호가 바뀔 때마다 이름 칸을 먼저.
     (같은 고객의 주문이 연달아 있어도 주문마다 이름 칸이 들어가서 상품이 섞여 보이지 않게)"""
+    orders_of = {}                                  # 고객별 주문 수 (묶음배송이면 이름 뒤에 숫자)
+    for r in rows:
+        orders_of.setdefault(_t(r, "수령인") + "||" + _t(r, "주소"), set()).add(_t(r, "주문번호"))
     seq, prev = [], None
     for r in rows:
         key = _t(r, "수령인") + "||" + _t(r, "주소")
         mark = (key, _t(r, "주문번호"))
         if mark != prev:
-            seq.append({"type": "NAME", "text": _t(r, "수령인"), "key": key})
+            seq.append({"type": "NAME", "text": _t(r, "수령인"), "key": key, "n": len(orders_of[key])})
             prev = mark
         seq.append({"type": "PROD", "line1": _t(r, "주문상품명"), "line2": _t(r, "옵션")})
     return seq
+
+
+def name_text(item, measure=None, width=None):
+    """이름 칸 글자: 묶음배송(주문 2건 이상)이면 '홍길동(6)'.
+    칸에 안 들어가면 숫자는 그대로 두고 이름만 줄임: '홍길동홍길…(6)'.
+    measure(글자) → 폭, width: 칸 안쪽 폭 (없으면 줄이지 않음)"""
+    name, n = item["text"], item.get("n", 1)
+    tail = f"({n})" if n >= 2 else ""
+    if not measure or measure(name + tail) <= width:
+        return name + tail
+    while name and measure(name + "…" + tail) > width:
+        name = name[:-1]
+    return name + "…" + tail
+
+
+def _approx_width(text, size):
+    """엑셀용 대략 폭(pt): 한글·전각은 글자 크기만큼, 나머지는 절반 남짓"""
+    return sum(size if ord(ch) > 0x2E80 else size * 0.55 for ch in text)
 
 
 def yellow_keys(rows):
@@ -156,7 +177,8 @@ def write_label_xlsx(pages, ykeys, path):
                 r1, r2, r3 = 2 + 3 * g, 3 + 3 * g, 4 + 3 * g
                 if item["type"] == "NAME":
                     ws.merge_cells(start_row=r1, start_column=a, end_row=r2, end_column=a + 4)
-                    c = ws.cell(r1, a, item["text"])
+                    c = ws.cell(r1, a, name_text(item, lambda t: _approx_width(t, 9), SHEET["w"] / 25.4 * 72 - 6)
+                                if item.get("n", 1) >= 2 else item["text"])     # 묶음이 아니면 예전 그대로
                     c.font = Font(**{**base, "size": 9}, bold=True)
                     c.alignment = center_top
                     c.fill = PatternFill("solid", fgColor=name_color(item, ykeys))
@@ -222,6 +244,11 @@ def _font(regular_fallback=None, bold_fallback=None):
 def _hex(argb):
     from reportlab.lib.colors import HexColor
     return HexColor("#" + argb[2:])
+
+
+def _width(text, font, size):
+    from reportlab.pdfbase.pdfmetrics import stringWidth
+    return stringWidth(text, font, size)
 
 
 def _fit(c, text, font, size, width):
@@ -310,7 +337,8 @@ def write_label_pdf(pages, ykeys, path, cal=None, fonts=(None, None)):
                     c.rect(x * mm, top - text_h * mm, w * mm, text_h * mm, stroke=0, fill=1)
                     c.setFillColor(_hex("FF000000")); c.setFont(fb, 8)
                     text(c.drawCentredString, (x + w / 2) * mm, top - 0.4 * mm - 8 * 0.9,
-                         _fit(c, item["text"], fb, 8, inner), bold=True)
+                         name_text(item, lambda t: _width(t, fb, 8), inner) if item.get("n", 1) >= 2
+                         else _fit(c, item["text"], fb, 8, inner), bold=True)
                 elif not item["line2"]:
                     c.setFont(fr, 6)
                     for n, line in enumerate(_wrap2(item["line1"], fr, 6, inner)):
