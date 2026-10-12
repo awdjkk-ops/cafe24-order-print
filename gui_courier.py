@@ -52,6 +52,8 @@ class CourierTab(ttk.Frame):
         super().__init__(master, padding=12, style="Page.TFrame")
         self.app = app
         self.last = None            # 마지막으로 만든(또는 미리 본) 결과
+        self._auto_key = None       # 자동 미리보기를 한 대기 목록 (바뀌면 다시)
+        self._gen = 0               # 늦게 끝난 자동 미리보기가 새 결과를 덮지 않게
         left = ttk.Frame(self, style="Page.TFrame"); left.grid(row=0, column=0, sticky="nsw")
         right = ttk.Frame(self, style="Page.TFrame"); right.grid(row=0, column=1, sticky="nsew", padx=(16, 0))
         self.columnconfigure(1, weight=1); self.rowconfigure(0, weight=1)
@@ -61,10 +63,11 @@ class CourierTab(ttk.Frame):
         self.wait_lb = ttk.Label(wf, text="", style="Big.TLabel"); self.wait_lb.grid(row=0, column=0, sticky="w")
         hint(wf, "이 프로그램으로 출력한 주문 중 아직 택배 파일을 만들지 않은 주문입니다 (뽑은 순서대로). "
                  "오늘 못 보내는 주문도 포함됩니다.", row=1, column=0, sticky="w", pady=(2, 6), wrap=430)
-        cols = (("oid", "주문번호", 140), ("buyer", "수령인", 70), ("place", "경로", 85), ("when", "출력한 때", 100))
+        cols = (("no", "번호", 40), ("oid", "주문번호", 140), ("buyer", "수령인", 70), ("place", "경로", 85),
+                ("when", "출력한 때", 100))
         self.wait = ttk.Treeview(wf, columns=[c[0] for c in cols], show="headings", height=9, selectmode="extended")
         for c, t, w in cols:
-            self.wait.heading(c, text=t); self.wait.column(c, width=w, anchor="w")
+            self.wait.heading(c, text=t); self.wait.column(c, width=w, anchor="center" if c == "no" else "w")
         self.wait.grid(row=2, column=0, sticky="we")
         wb = ttk.Frame(wf); wb.grid(row=3, column=0, sticky="we", pady=(8, 0))
         self.b_rm = ttk.Button(wb, text="선택한 주문 대기에서 빼기", command=self.remove_selected)
@@ -80,11 +83,12 @@ class CourierTab(ttk.Frame):
         af.grid(row=1, column=0, sticky="we", pady=(10, 0))
         self.b_pre = ttk.Button(af, text="미리 확인", command=lambda: self.run(False))
         self.b_pre.grid(row=0, column=0, sticky="w")
-        hint(af, "파일을 만들지 않고 묶음배송·배송메세지·블랙리스트 등을 먼저 봅니다. 추가배송은 지우지 않습니다.",
+        hint(af, "파일을 만들지 않고 묶음배송·배송메세지·블랙리스트 등을 먼저 봅니다. 추가배송은 지우지 않습니다. "
+                 "택배·라벨 탭을 열면 대기 주문으로 자동으로 미리 확인합니다.",
              row=1, column=0, sticky="w", pady=(2, 8), wrap=430)
         self.b_make = ttk.Button(af, text="택배 파일 만들기", style="Main.TButton", command=lambda: self.run(True))
         self.b_make.grid(row=2, column=0, sticky="w")
-        hint(af, "대기 주문 전체와 구글 시트의 추가배송으로 택배 파일을 만들고 폴더를 엽니다. 추가배송은 시트에서 지워지고, "
+        hint(af, "대기 주문 전체와 구글 시트의 추가배송으로 택배 파일을 만듭니다. 추가배송은 시트에서 지워지고, "
                  "만든 주문은 대기 목록에서 빠집니다. 카페24에서 최신 정보를 불러오며 그사이 취소된 주문은 뺍니다.",
              row=3, column=0, sticky="w", pady=(2, 0), wrap=430)
         self.stat = ttk.Label(af, text="", justify="left", foreground=T.GREEN_D, wraplength=430)
@@ -130,9 +134,12 @@ class CourierTab(ttk.Frame):
         self.split_badge.refresh()
         cand = op.courier_candidates()
         self.wait.delete(*self.wait.get_children())
+        n = 0
         for o, when in cand:
             if not self.wait.exists(o["order_id"]):
-                self.wait.insert("", "end", iid=o["order_id"], values=(o["order_id"], o.get("receiver") or o["buyer"], o["place"], when))
+                n += 1
+                self.wait.insert("", "end", iid=o["order_id"],
+                                 values=(n, o["order_id"], o.get("receiver") or o["buyer"], o["place"], when))
         self.wait_lb.configure(text=f"대기 {len(cand)}건")
         hist = op.load_courier_history()
         self.hist.configure(values=[f"{h['time'][5:16].replace('T', ' ')} · {h['count']}건 · {Path(h['file']).name}"
@@ -150,6 +157,7 @@ class CourierTab(ttk.Frame):
         op.remove_from_courier_wait(ids)
         self.app.flash(f"{len(ids)}건을 택배 대기에서 뺐습니다.")
         self.refresh()
+        self.auto_preview()
 
     def clear_all(self):
         ids = [o["order_id"] for o, _ in op.courier_candidates()]
@@ -165,6 +173,7 @@ class CourierTab(ttk.Frame):
         op.remove_from_courier_wait(ids)
         self.app.flash(f"택배 대기 {len(ids)}건을 모두 뺐습니다.")
         self.refresh()
+        self.auto_preview()
 
     def _fill(self, texts):
         for name, t in self.texts.items():
@@ -194,7 +203,54 @@ class CourierTab(ttk.Frame):
         self.app.label_tab.set_target(ids=h.get("orders", []), split_n=h.get("split_orders", 0),
                                       title=f"{h['time'][5:16].replace('T', ' ')} 택배 파일의 주문 {len(h.get('orders', []))}건")
 
+    def auto_preview(self, force=False):
+        """대기 주문으로 확인 목록과 라벨을 조용히 미리보기 (팝업 없음, 대기 목록이 바뀌었을 때만)"""
+        cand = op.courier_candidates()
+        ids = [o["order_id"] for o, _ in cand]
+        key = (tuple(ids), op.split_on())
+        if not ids or self.app.busy or (key == self._auto_key and not force):
+            if not ids and key != self._auto_key:
+                self._auto_key = key
+                self.res_title.configure(text="확인 목록 — 대기 주문 없음")
+                self._fill({})
+                self.app.label_tab.waiting_preview(None)
+            return
+        self._auto_key = key
+        self._gen += 1
+        gen = self._gen
+        self.res_title.configure(text="확인 목록 — 대기 주문 불러오는 중...")
+
+        def work():
+            return op.make_courier(self.app.cfg, op.get_access_token(self.app.cfg), ids, False)
+
+        def done(r):
+            if gen != self._gen:
+                return                      # 그사이 택배 파일을 만들거나 다시 미리 봄
+            self.last = r
+            self._fill(r["texts"])
+            a = r["analysis"]
+            self.res_title.configure(text=f"확인 목록 — 대기 주문 {len(r['orders'])}건 자동 미리 확인 (파일 안 만듦)")
+            self.stat.configure(text=f"대기 주문 {len(r['orders'])}건 · 묶음배송 {len(a['bundle'])}묶음 · "
+                                     f"블랙리스트·경계대상 {len(a['blacklist'])}건"
+                                     + (f" · 추가배송 {len(a['extra'])}건" if a["extra"] else "")
+                                     + ("\n" + "\n".join(r["warnings"]) if r["warnings"] else ""))
+            self.app.label_tab.waiting_preview(r)
+
+        def failed(e):
+            if gen == self._gen:
+                self._auto_key = None
+                self.res_title.configure(text="확인 목록 — 자동 미리 확인 실패 ([미리 확인]을 눌러 다시)")
+                op.log.warning(f"[자동 미리 확인] 실패: {e}")
+
+        def safe():
+            try:
+                return ("ok", work())
+            except Exception as e:
+                return ("err", e)
+        self.app.bg(safe, lambda res: done(res[1]) if res[0] == "ok" else failed(res[1]), busy=False)
+
     def run(self, create):
+        self._gen += 1                      # 진행 중인 자동 미리보기 결과는 버림
         cand = op.courier_candidates()
         if not cand:
             messagebox.showinfo("택배 파일", "택배 파일을 만들 대기 주문이 없습니다.\n(주문서를 먼저 출력해 주세요)")
@@ -215,8 +271,11 @@ class CourierTab(ttk.Frame):
 
         def done(r):
             self.last = r
-            self.app.label_tab.set_target(rows=r["rows"], title=("방금 만든 택배 파일" if create else "미리 확인한 대기 주문")
-                                          + f"의 주문 {len(r['orders'])}건")
+            self._auto_key = None if create else (tuple(ids), op.split_on())
+            if create:
+                self.app.label_tab.set_target(rows=r["rows"], title=f"방금 만든 택배 파일의 주문 {len(r['orders'])}건")
+            else:
+                self.app.label_tab.waiting_preview(r)
             a = r["analysis"]
             self._fill(r["texts"])
             self.res_title.configure(text="확인 목록 — " + ("방금 만든 택배 파일" if create else "미리 확인 (파일 안 만듦)"))

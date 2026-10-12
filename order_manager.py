@@ -29,6 +29,7 @@ class App(tk.Tk):
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
         self.geometry(f"{min(1260, sw - 40)}x{min(960, sh - 80)}+10+10")
         self.q = queue.Queue()
+        op.SPOOL_LISTENER = lambda n, stalled: self.q.put(("spool", (n, stalled)))   # 프린터로 보내는 진행 상황
         self.busy = False
         self.cfg = None
         T.apply(self)
@@ -101,8 +102,10 @@ class App(tk.Tk):
             if nb.select() == str(self.pages["lists"]):
                 self.lists_tab.refresh()
             self.label_tab.split_badge.refresh()
-            if nb.select() == str(self.pages["courier"]) and self.cfg:
-                self.bg(lambda: op.prefetch_sheet(self.cfg), lambda _: None, busy=False)   # 블랙리스트·추가배송 미리 받기
+            if nb.select() in (str(self.pages["courier"]), str(self.pages["label"])) and self.cfg:
+                self.courier_tab.auto_preview()            # 대기 주문으로 확인 목록·라벨 미리보기 (바뀐 게 있을 때만)
+            if nb.select() == str(self.pages["label"]):
+                self.label_tab.on_show()
         nb.bind("<<NotebookTabChanged>>", on_tab)
         self._build_print_tab()
         self.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -215,6 +218,15 @@ class App(tk.Tk):
                     self.pbar.configure(mode="determinate", maximum=t, value=d)
                     base = self._busy_msg.rstrip(".") or "처리 중"
                     self.prog_lb.configure(text=f"{base}  {d} / {t}건   ·   끝날 때까지 창을 닫지 마세요")
+                elif kind == "spool":
+                    n, stalled = data
+                    if self.busy:
+                        if stalled:
+                            self.prog_lb.configure(text=f"⚠ 프린터로 보내기가 5분째 진행되지 않아요 ({n}장 보냄) — "
+                                                        "프린터를 확인하세요. 계속 기다리는 중입니다", fg=T.RED)
+                        else:
+                            self.prog_lb.configure(text=f"프린터로 보내는 중  {n}장   ·   끝날 때까지 창을 닫지 마세요",
+                                                   fg=T.GREEN_D)
                 elif kind == "done":
                     done, res, busy = data
                     if busy:
@@ -248,6 +260,8 @@ class App(tk.Tk):
         for b in (self.action_buttons + getattr(getattr(self, "courier_tab", None), "buttons", [])
                   + getattr(getattr(self, "label_tab", None), "buttons", [])):
             b.state(["disabled"] if on else ["!disabled"])
+        if not on and hasattr(self, "label_tab"):
+            self.label_tab.sync_buttons()
         if on:
             self._busy_msg = msg
             self._band_show(msg, T.GREEN_L, T.GREEN_D, progress=True)

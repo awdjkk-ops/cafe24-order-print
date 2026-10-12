@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """통합 창 - '라벨' 탭: 라벨지 미리보기 + 사용한 칸 지정 (웹 도구와 같은 조작) + 바로 인쇄·엑셀"""
+import datetime as dt
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import ttk, messagebox
@@ -24,6 +25,7 @@ class LabelTab(ttk.Frame):
         self.title = ""
         self.used = {}             # {페이지: {칸번호}}
         self.removed = []          # 지운 라벨의 원래 순번 (지운 순서대로 — 되돌리기는 뒤에서부터)
+        self.preview_only = False  # 택배 대기 주문 미리보기 (인쇄는 택배 파일을 만든 뒤)
         self.page = 0
         self.drag = None           # 드래그 중 칠할 상태 (True=사용함)
         self.last_click = None     # Shift+클릭 기준 (페이지, 칸)
@@ -41,8 +43,8 @@ class LabelTab(ttk.Frame):
         self.target_lb = ttk.Label(tf, text="", wraplength=280, justify="left", font=T.f(11, True))
         self.target_lb.grid(row=0, column=0, sticky="w")
         self.count_lb = ttk.Label(tf, text="", wraplength=280, justify="left"); self.count_lb.grid(row=1, column=0, sticky="w", pady=(4, 0))
-        hint(tf, "택배 탭에서 택배 파일을 만들거나 미리 확인하면 그 주문으로 라벨이 준비됩니다. "
-                 "예전 택배 파일을 고르면 그 주문으로 바뀝니다.", row=2, column=0, sticky="w", pady=(6, 0), wrap=280)
+        hint(tf, "택배 파일을 만들기 전에는 택배 대기 주문으로 미리보기가 자동으로 나옵니다(인쇄는 택배 파일을 만든 뒤). "
+                 "택배 파일을 만들면 그 주문으로, 예전 택배 파일을 고르면 그 주문으로 바뀝니다.", row=2, column=0, sticky="w", pady=(6, 0), wrap=280)
         lg = ttk.Frame(tf); lg.grid(row=3, column=0, sticky="w", pady=(8, 0))
         for color, text in (("#FFC0CB", "일반"), ("#FFFF00", "묶음배송"), ("#B7E4B0", "스마트스토어")):
             tk.Label(lg, text="  ", bg=color, relief="solid", bd=1).pack(side="left")
@@ -108,11 +110,45 @@ class LabelTab(ttk.Frame):
         self.draw()
 
     # ------------------------------------------------------------ 대상 설정 (택배 탭에서 호출)
-    def set_target(self, rows=None, ids=None, title="", split_n=0):
+    def set_target(self, rows=None, ids=None, title="", split_n=0, preview_only=False):
         self.rows, self.ids, self.title, self.split_n = rows, ids, title, split_n
+        self.preview_only = preview_only
         self.used, self.page, self.last_click = {}, 0, None
         self.removed = []
         self.draw()
+
+    def sync_buttons(self):
+        """대기 주문 미리보기일 때는 인쇄·엑셀 막기"""
+        off = self.preview_only or getattr(self.app, "busy", False)
+        for b in (self.b_print, self.b_xlsx):
+            b.state(["disabled"] if off else ["!disabled"])
+
+    def waiting_preview(self, r):
+        """택배 대기 주문 미리보기. 택배 파일(방금 만든 것·예전 것)을 보고 있으면 바꾸지 않음"""
+        if self.rows is not None and not self.preview_only:
+            return
+        if self.ids and not self.preview_only:
+            return
+        if r is None:
+            if self.preview_only or self.rows is None:
+                self.set_target(title="")
+                self.on_show()
+            return
+        self.set_target(rows=r["rows"], title=f"택배 대기 주문 {len(r['orders'])}건 — 미리보기", preview_only=True)
+
+    def on_show(self):
+        """라벨 탭을 열 때: 대상이 없으면 오늘 만든 마지막 택배 파일을, 주문번호만 있으면 바로 불러와 미리보기"""
+        if self.app.busy:
+            return
+        if self.rows is None and not self.ids:
+            today = dt.date.today().isoformat()
+            hist = [h for h in op.load_courier_history() if str(h.get("time", "")).startswith(today)]
+            if hist and not op.courier_candidates():
+                h = hist[0]
+                self.set_target(ids=h.get("orders", []), split_n=h.get("split_orders", 0),
+                                title=f"{h['time'][5:16].replace('T', ' ')} 택배 파일의 주문 {len(h.get('orders', []))}건")
+        if self.rows is None and self.ids:
+            self.ensure_rows(lambda: None)
 
     def _break_at(self):
         if self.rows is None:
@@ -195,6 +231,9 @@ class LabelTab(ttk.Frame):
         self.removed_lb.configure(text=f"지운 항목 {len(self.removed)}개" if self.removed else "오른쪽 클릭으로 라벨을 지울 수 있습니다")
         for b in (self.b_undo, self.b_restore):
             b.state(["!disabled"] if self.removed else ["disabled"])
+        self.sync_buttons()
+        if self.preview_only:
+            self.target_lb.configure(text=self.title + "\n(택배 파일을 만든 뒤 인쇄할 수 있어요)")
         self.page_lb.configure(text=f"페이지 {self.page + 1} / {len(pages)}")
         states = [self.page > 0, self.page > 0, self.page < len(pages) - 1, self.page < len(pages) - 1]
         for b, ok in zip(self.nav_btns, states):

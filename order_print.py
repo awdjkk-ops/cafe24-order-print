@@ -1012,7 +1012,83 @@ def find_sumatra(cfg):
     return next((c for c in cands if c and Path(c).exists()), None)
 
 
-def print_pdf(cfg, path, exact=False):
+SPOOL_STALL_SECONDS = 300      # 이 시간 동안 프린터로 한 장도 안 쌓이면 경고 (계속 기다림)
+SPOOL_MAX_SECONDS = 3600       # 마지막 한계선: 이 시간이 지나도 안 끝나면 실패
+SPOOL_LISTENER = None          # 화면(관리 창)에서 진행 상황을 받는 곳: f(보낸 장 수, 멈춤 여부)
+
+
+class PrintStopped(Exception):
+    """프린터로 보내는 도중 사람이 중지함 (이미 나온 장이 있을 수 있음)"""
+
+
+def _spool_progress(printer, stem):
+    """윈도우 인쇄 대기열에서 이 문서가 지금까지 쌓인 (장 수, 크기). 못 읽으면 None"""
+    if sys.platform != "win32" or not printer:
+        return None
+    name, st = printer.replace("'", "''"), stem.replace("'", "''")
+    try:
+        out = _powershell(f"$j=@(Get-PrintJob -PrinterName '{name}' -ErrorAction Stop | "
+                          f"Where-Object {{ $_.DocumentName -like '*{st}*' }}); "
+                          "if ($j.Count) { \"$($j[0].TotalPages)|$($j[0].Size)\" } else { 'none' }")
+    except Exception:
+        return None
+    out = (out or "").strip()
+    if not out or "|" not in out:
+        return (0, 0) if out == "none" else None
+    a, b = out.split("|", 1)
+    try:
+        return int(a or 0), int(b or 0)
+    except ValueError:
+        return None
+
+
+def _run_sumatra(cmd, cfg, printer, path, on_spool=None, stoppable=False):
+    """SumatraPDF로 프린터에 보내기. 정해진 시간에 끊지 않고, 대기열에 장이 쌓이는 동안은 끝까지 기다림.
+    5분 동안 한 장도 안 쌓이면 경고만 하고 계속 기다림, 1시간이 지나면 실패."""
+    on_spool = on_spool or SPOOL_LISTENER
+    stem = Path(path).stem
+    proc = subprocess.Popen(cmd)
+    start = last_change = time.time()
+    last, warned, readable = None, False, False
+    while True:
+        try:
+            rc = proc.wait(timeout=15)
+            break
+        except subprocess.TimeoutExpired:
+            pass
+        now = time.time()
+        if stoppable and stop_requested():
+            proc.kill()
+            cancel_print_jobs(cfg, path)
+            log.info(f"[인쇄] 보내는 도중 중지: {Path(path).name}")
+            raise PrintStopped()
+        prog = _spool_progress(printer, stem)
+        if prog is not None:
+            readable = True
+            if prog != last:
+                last, last_change = prog, now
+                if warned:
+                    warned = False
+                    log.info(f"[인쇄] 다시 진행됨 ({prog[0]}장 보냄)")
+        if readable and not warned and now - last_change >= SPOOL_STALL_SECONDS:
+            warned = True
+            log.warning(f"[인쇄] {SPOOL_STALL_SECONDS // 60}분째 진행 없음 ({(last or (0, 0))[0]}장 보냄) — 계속 기다립니다")
+        if on_spool:
+            try:
+                on_spool((last or (0, 0))[0], warned)
+            except Exception:
+                pass
+        if now - start >= SPOOL_MAX_SECONDS:
+            proc.kill()
+            cancel_print_jobs(cfg, path)
+            raise RuntimeError(f"프린터로 보내기가 {SPOOL_MAX_SECONDS // 60}분 안에 끝나지 않아 멈췄습니다 "
+                               f"({(last or (0, 0))[0]}장까지 보냄). 프린터 상태를 확인한 뒤 다시 뽑아 주세요.")
+    if rc != 0:
+        raise RuntimeError(f"인쇄 프로그램 오류 (코드 {rc})")
+    log.info(f"[인쇄] 프린터로 보내기 끝: {(time.time() - start) / 60:.1f}분" + (f", {last[0]}장" if last else ""))
+
+
+def print_pdf(cfg, path, exact=False, on_spool=None, stoppable=False):
     """exact=True: 라벨처럼 축소·확대 없이 실제 크기(100%)로 인쇄"""
     sumatra = find_sumatra(cfg)
     if sumatra and exact and cfg.get("label_print_dialog", True):
@@ -1030,7 +1106,8 @@ def print_pdf(cfg, path, exact=False):
         if exact and (cfg.get("label_tray_kind") or cfg.get("label_tray")):   # 라벨지를 넣는 트레이 (예: 뒷면 트레이)
             # 드라이버가 쓰는 트레이 번호가 있으면 번호로(더 확실), 없으면 이름으로 지정
             settings += f",bin={cfg.get('label_tray_kind') or cfg['label_tray']}"
-        subprocess.run([sumatra, *target, "-print-settings", settings, "-silent", str(path)], check=True, timeout=900)
+        _run_sumatra([sumatra, *target, "-print-settings", settings, "-silent", str(path)], cfg,
+                     printer or list_printers()[1], path, on_spool, stoppable)
     elif sys.platform == "win32":
         log.warning("SumatraPDF가 없어 윈도우 기본 인쇄를 사용합니다.")
         os.startfile(str(path), "print")
@@ -1283,7 +1360,8 @@ def make_pdf(cfg, token, orders, prefix, progress=None, end_sheet=False, split=F
     return pdf, pages
 
 
-def print_orders(cfg, token, orders, kind, progress=None, record=True, end_sheet=False, stage=None, split=False):
+def print_orders(cfg, token, orders, kind, progress=None, record=True, end_sheet=False, stage=None, split=False,
+                 on_spool=None):
     """주문서 만들기 → 인쇄 → (record면) 중복 방지 기록 → 출력 기록 추가"""
     verify_orders(orders, "주문서 인쇄")
     orders = list(orders)
@@ -1291,7 +1369,7 @@ def print_orders(cfg, token, orders, kind, progress=None, record=True, end_sheet
                           reverse=sch.load_settings().get("print_reverse", True))
     if stage:
         stage("인쇄 중", pdf=str(pdf), pages=pages)
-    print_pdf(cfg, pdf)
+    print_pdf(cfg, pdf, on_spool=on_spool, stoppable=bool(stage))
     now = dt.datetime.now()
     if record:
         rv = load_reverted()
@@ -1583,7 +1661,10 @@ def run(cfg, mode):
                     if phase == "인쇄 중":
                         sent["pdf"] = kw.get("pdf")
                     orig_stage(phase, **kw)
-                pdf, pages = print_orders(cfg, token, orders, "자동", prog, end_sheet=True, stage=stage2,
+                def spool(n, stalled):
+                    auto_status(phase="프린터로 보내는 중", printer_progress=f"{n}장 보냄",
+                                printer_issues=["5분째 진행이 없어요 — 프린터를 확인하세요 (계속 기다리는 중)"] if stalled else [])
+                pdf, pages = print_orders(cfg, token, orders, "자동", prog, end_sheet=True, stage=stage2, on_spool=spool,
                                           split=split_on(today))
                 sent["pdf"] = str(pdf)
                 sent["printed"] = True
@@ -1592,8 +1673,8 @@ def run(cfg, mode):
                 auto_status(phase="완료" if w["state"] != "problem" else "확인 필요", final=True,
                             result=w["state"], printer_issues=w["issues"], printer_note=w["note"],
                             pages=pages - LAST_END_PAGES, end_pages=LAST_END_PAGES, pdf=str(pdf))
-            except AutoStopped:
-                was_sent = bool(sent.get("printed"))
+            except (AutoStopped, PrintStopped) as stop_e:
+                was_sent = bool(sent.get("printed")) or isinstance(stop_e, PrintStopped)
                 if was_sent:
                     cancel_print_jobs(cfg, sent["pdf"])
                     rollback_batch(orders, sent["pdf"])
