@@ -142,7 +142,8 @@ class LabelTab(ttk.Frame):
             return
         if self.rows is None and not self.ids:
             today = dt.date.today().isoformat()
-            hist = [h for h in op.load_courier_history() if str(h.get("time", "")).startswith(today)]
+            hist = [h for h in op.load_courier_history() if str(h.get("time", "")).startswith(today)
+                    and not h.get("extra_only")]          # 추가배송만 만든 파일은 라벨 대상이 아님
             if hist and not op.courier_candidates():
                 h = hist[0]
                 self.set_target(ids=h.get("orders", []), split_n=h.get("split_orders", 0),

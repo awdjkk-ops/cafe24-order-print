@@ -723,6 +723,58 @@ def _sheet_cached(url, action):
     return data
 
 
+def _delete_extras(url, extra, warnings):
+    """택배 파일에 넣은 추가배송을 구글 시트에서 한 건씩 지움 (실패한 건은 기록하고 알림)"""
+    import courier as C
+    failed = []
+    for it in extra:
+        try:
+            if it.get("id") in (None, ""):
+                raise C.SheetError("번호 없음")
+            C.sheet_call(url, "deleteExtra", id=it["id"])
+            _SHEET_CACHE.pop("listExtra", None)           # 지웠으니 다음엔 새로 받음
+        except C.SheetError as e:
+            failed.append(it)
+            log.error(f"추가배송 삭제 실패({it.get('name')}): {e}")
+    if failed:
+        write_json(DATA / f"추가배송_삭제실패_{dt.datetime.now():%Y%m%d_%H%M%S}.json", failed)
+        warnings.append(f"택배 파일에는 넣었지만 구글 시트에서 지우지 못한 추가배송 {len(failed)}건: "
+                        + ", ".join(str(it.get("name")) for it in failed)
+                        + "\n→ 다음 택배 파일에 또 들어가지 않도록 [블랙리스트·추가배송] 탭에서 직접 삭제해 주세요.")
+    return failed
+
+
+def make_extra_courier(cfg):
+    """구글 시트의 추가배송만으로 택배 파일(롯데택배 알프스 양식)을 만들고, 넣은 건은 시트에서 지움.
+    택배 파일을 이미 만든 뒤에 들어온 추가배송을 따로 보낼 때 씀. 돌려줌: {path, analysis, texts, warnings} (추가배송이 없으면 path=None)"""
+    import courier as C
+    url = cfg.get("sheet_api_url", "")
+    if not url:
+        raise C.SheetError("구글 시트 주소가 없습니다 (관리 탭에서 설정).")
+    _SHEET_CACHE.pop("listExtra", None)                   # 추가배송은 꼭 지금 것으로
+    extra = C.sheet_call(url, "listExtra").get("items", [])
+    warnings = []
+    if not extra:
+        return {"path": None, "analysis": None, "texts": {}, "warnings": warnings}
+    try:
+        blacklist = _sheet_cached(url, "list").get("items", [])
+    except C.SheetError as e:
+        raise C.SheetError(f"블랙리스트를 확인하지 못해 택배 파일을 만들지 않았습니다.\n{e}")
+    a = C.analyze([], extra, blacklist)
+    COURIER_DIR.mkdir(parents=True, exist_ok=True)
+    path = COURIER_DIR / f"택배발송_추가배송만_{dt.datetime.now():%Y-%m-%d_%H%M}.xlsx"
+    C.write_courier_xlsx(a, path)
+    _delete_extras(url, extra, warnings)
+    texts = C.summary_texts(a)
+    now = dt.datetime.now().isoformat(timespec="seconds")
+    hist = load_courier_history()
+    hist.insert(0, {"time": now, "file": str(path), "orders": [], "split_orders": 0, "extra_only": True,
+                    "count": len(a["rows"]), "extra": len(a["extra"]), "texts": texts, "popup": "", "excluded": []})
+    write_json(COURIER_HIST_FILE, hist[:60])
+    log.info(f"[택배 파일] {path.name}: 추가배송만 {len(a['rows'])}줄, 블랙리스트·경계 {len(a['blacklist'])}")
+    return {"path": path, "analysis": a, "texts": texts, "warnings": warnings}
+
+
 def make_courier(cfg, token, ids, create=True, progress=None):
     """ids 주문으로 택배 파일 분석(create=False: 미리보기, 추가배송 안 지움) 또는 생성.
     돌려줌: {analysis, texts, popup, path, excluded, orders, rows, warnings}"""
@@ -779,21 +831,7 @@ def make_courier(cfg, token, ids, create=True, progress=None):
     C.write_courier_xlsx(a, path)
     log.info(f"[택배 파일 시간] 카페24 {t_cafe:.1f}초 · 구글 시트까지 {t_sheet:.1f}초 · 파일 저장까지 {time.time() - t0:.1f}초"
              f" (주문 {len(ids)}건)")
-    failed = []
-    for it in extra:
-        try:
-            if it.get("id") in (None, ""):
-                raise C.SheetError("번호 없음")
-            C.sheet_call(url, "deleteExtra", id=it["id"])
-            _SHEET_CACHE.pop("listExtra", None)           # 지웠으니 다음엔 새로 받음
-        except C.SheetError as e:
-            failed.append(it)
-            log.error(f"추가배송 삭제 실패({it.get('name')}): {e}")
-    if failed:
-        write_json(DATA / f"추가배송_삭제실패_{dt.datetime.now():%Y%m%d_%H%M%S}.json", failed)
-        warnings.append(f"택배 파일에는 넣었지만 구글 시트에서 지우지 못한 추가배송 {len(failed)}건: "
-                        + ", ".join(str(it.get("name")) for it in failed)
-                        + "\n→ 다음 택배 파일에 또 들어가지 않도록 [블랙리스트·추가배송] 탭에서 직접 삭제해 주세요.")
+    _delete_extras(url, extra, warnings)
     now = dt.datetime.now().isoformat(timespec="seconds")
     done = read_json(COURIER_DONE_FILE, {})
     done.update({o["order_id"]: now for o in orders})

@@ -142,7 +142,8 @@ class CourierTab(ttk.Frame):
                                  values=(n, o["order_id"], o.get("receiver") or o["buyer"], o["place"], when))
         self.wait_lb.configure(text=f"대기 {len(cand)}건")
         hist = op.load_courier_history()
-        self.hist.configure(values=[f"{h['time'][5:16].replace('T', ' ')} · {h['count']}건 · {Path(h['file']).name}"
+        self.hist.configure(values=[f"{h['time'][5:16].replace('T', ' ')} · {'추가배송만 ' if h.get('extra_only') else ''}"
+                                    f"{h['count']}건 · {Path(h['file']).name}"
                                     for h in hist])
 
     def remove_selected(self):
@@ -200,6 +201,9 @@ class CourierTab(ttk.Frame):
         self._fill(h.get("texts", {}))
         self.res_title.configure(text=f"확인 목록 — {h['time'][5:16].replace('T', ' ')} 택배 파일")
         self.last = {"path": h["file"]}
+        if h.get("extra_only"):              # 추가배송만 만든 파일 — 라벨은 그대로 둠
+            self.res_title.configure(text=f"확인 목록 — {h['time'][5:16].replace('T', ' ')} 추가배송만 만든 택배 파일")
+            return
         self.app.label_tab.set_target(ids=h.get("orders", []), split_n=h.get("split_orders", 0),
                                       title=f"{h['time'][5:16].replace('T', ' ')} 택배 파일의 주문 {len(h.get('orders', []))}건")
 

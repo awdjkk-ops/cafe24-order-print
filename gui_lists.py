@@ -182,7 +182,56 @@ class ListsTab(ttk.Frame):
             "주문 파일에 없는 배송(재발송·교환 등)을 등록하면 다음 택배 파일에 함께 들어가고, 파일을 만든 뒤 자동으로 지워집니다. "
             "메모는 택배 파일의 상품명 칸에 들어갑니다.", v_extra)
         self.extra.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+        xf = ttk.Frame(self.extra); xf.grid(row=7, column=0, sticky="we", pady=(10, 0))
+        b = ttk.Button(xf, text="추가배송만 택배파일 만들기", style="Ghost.TButton", command=self.make_extra_file)
+        b.grid(row=0, column=0, sticky="w")
+        hint(xf, "오늘 택배 파일을 이미 만든 뒤에 들어온 추가배송을 따로 보낼 때 씁니다. 지금 목록의 추가배송 전부로 "
+                 "롯데택배 엑셀(택배발송_추가배송만_날짜.xlsx)을 만들고, 넣은 건은 구글 시트에서 지웁니다. "
+                 "평소처럼 택배 파일을 만들 때 함께 넣는 기능은 그대로입니다.",
+             row=1, column=0, sticky="w", pady=(4, 0), wrap=520)
+        self.extra_btn = b
 
     def refresh(self):
         self.black.load()
         self.extra.load()
+
+    def make_extra_file(self):
+        """구글 시트의 추가배송만으로 롯데택배 엑셀을 만들고, 넣은 건은 시트에서 지움"""
+        if not self.extra.url:
+            messagebox.showwarning("추가배송만 택배파일", "구글 시트 주소가 없습니다 (관리 탭에서 설정).")
+            return
+
+        def got(data):
+            items = data.get("items", [])
+            if not items:
+                messagebox.showinfo("추가배송만 택배파일", "지금 구글 시트에 추가배송이 없습니다.")
+                self.extra.items = []; self.extra.show()
+                return
+            names = "\n".join(f"· {it.get('name', '')}  {str(it.get('address', ''))[:24]}" for it in items[:12])
+            if not messagebox.askyesno("추가배송만 택배파일",
+                                       f"추가배송 {len(items)}건으로 롯데택배 엑셀을 만들까요?\n\n{names}"
+                                       + ("\n…" if len(items) > 12 else "")
+                                       + "\n\n만든 뒤 이 추가배송들은 구글 시트에서 지워집니다 (오늘 택배 파일과 따로 올리세요)."):
+                return
+            self.app.bg(lambda: op.make_extra_courier(self.app.cfg), done, "추가배송 택배파일 만드는 중...")
+
+        def done(res):
+            self.extra.load()
+            self.app.courier_tab.refresh()
+            if not res["path"]:
+                messagebox.showinfo("추가배송만 택배파일", "그사이 추가배송이 모두 지워져서 만들 것이 없습니다.")
+                return
+            a = res["analysis"]
+            msg = f"{res['path'].name}\n\n추가배송 {len(a['rows'])}건으로 택배 파일을 만들고 구글 시트에서 지웠습니다."
+            if a["blacklist"]:
+                bl = res["texts"].get("블랙리스트·경계대상", "")
+                msg += f"\n\n⚠ 블랙리스트·경계대상 {len(a['blacklist'])}건 (파일에 색으로 표시):\n{bl}"
+            if a["jeju"]:
+                msg += "\n\n제주도: " + ", ".join(r["recipient"] for r in a["jeju"])
+            for w in res["warnings"]:
+                msg += "\n\n⚠ " + w
+            (messagebox.showwarning if res["warnings"] or a["blacklist"] else messagebox.showinfo)(
+                "추가배송만 택배파일 완료", msg + "\n\n폴더를 엽니다. 롯데택배 알프스에 올려 주세요.")
+            op.open_file(res["path"].parent)
+        op._SHEET_CACHE.pop("listExtra", None)
+        self.app.bg(lambda: C.sheet_call(self.extra.url, "listExtra"), got, "구글 시트에서 추가배송 확인 중...")
