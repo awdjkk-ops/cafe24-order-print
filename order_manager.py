@@ -15,6 +15,7 @@ from gui_courier import CourierTab
 from gui_lists import ListsTab
 from gui_labels import LabelTab
 from gui_scroll import scrolled
+from gui_tax import TaxTab
 import theme as T
 import updater
 from gui_schedule import ScheduleTab, hint
@@ -79,13 +80,13 @@ class App(tk.Tk):
         self.nb = nb
         self.pages = {}
 
-        def add(key, text, build):
+        def add(key, text, build, side="left"):
             area, tab = scrolled(nb, build)
             nb.add(area, text=text)
             self.pages[key] = area
             b = T.Pill(self.nav, text=text, bg=T.CARD, fg=T.INK, outline=T.LINE, under=T.BG, padx=16, pady=8)
             b.configure(cursor="hand2")
-            b.pack(side="left", padx=(0, 8))
+            b.pack(side=side, padx=(0, 8) if side == "left" else (8, 0))
             b.bind("<Button-1>", lambda e, k=key: self.show_tab(k))
             self.nav_btns[key] = b
             return tab
@@ -95,6 +96,7 @@ class App(tk.Tk):
         self.lists_tab = add("lists", "블랙리스트·추가배송", lambda p: ListsTab(p, self))
         self.sched_tab = add("sched", "자동 출력 설정", lambda p: ScheduleTab(p, on_saved=self.refresh_status))
         self.admin_tab = add("admin", "관리", lambda p: AdminTab(p, self))
+        self.tax_tab = add("tax", "세금계산서 발행", lambda p: TaxTab(p, self), side="right")   # 메뉴 줄 오른쪽 끝
 
         def on_tab(e):
             self._paint_nav()

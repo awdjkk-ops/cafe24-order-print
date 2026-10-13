@@ -1,6 +1,6 @@
 {
-  "version": "1.0.20",
-  "notes": "· 라벨: 묶음배송 고객의 이름 칸마다 주문 수 표시 — 홍길동(6). 긴 이름은 숫자를 남기고 이름만 줄임 (홍길동홍길…(6))",
+  "version": "1.0.21",
+  "notes": "· 새 메뉴 [세금계산서 발행]: 사업자 목록(한 번 등록 후 검색), 주문번호로 요청 추가, 같은 사업자·같은 달 주문 자동 합침, 홈택스 건별 발급 도우미(칸마다 복사), 홈택스 일괄발급 엑셀 만들기, 발행 완료 내역, 기존 엑셀 가져오기",
   "packages": [],
   "files": [
     "auto_print.bat",
@@ -14,6 +14,7 @@
     "gui_lists.py",
     "gui_schedule.py",
     "gui_scroll.py",
+    "gui_tax.py",
     "install.bat",
     "labels.py",
     "manager.bat",
@@ -23,6 +24,7 @@
     "order_print.py",
     "order_sheet.py",
     "print_schedule.py",
+    "tax.py",
     "theme.py",
     "updater.py",
     "디자인규칙.md",

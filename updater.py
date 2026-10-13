@@ -21,7 +21,7 @@ BACKUP_DIR = BASE / "backups"
 DEFAULT_REPO = "awdjkk-ops/cafe24-order-print"
 BRANCH = "main"
 # 이 이름들은 업데이트로 절대 덮어쓰지 않음
-PROTECTED = {"config.json", "settings.json", "data", "pdf", "logs", "backups", "출력주문 엑셀파일", "택배발송 파일"}
+PROTECTED = {"config.json", "settings.json", "data", "pdf", "logs", "backups", "출력주문 엑셀파일", "택배발송 파일", "세금계산서 파일"}
 
 
 class UpdateError(Exception):
