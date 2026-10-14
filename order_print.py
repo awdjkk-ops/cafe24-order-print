@@ -723,6 +723,60 @@ def _sheet_cached(url, action):
     return data
 
 
+MSG_EDIT_FILE = DATA / "courier_msg_edits.json"     # 택배 탭에서 지우거나 고친 배송메세지 {주문번호: {orig, new}}
+
+
+def load_msg_edits():
+    return read_json(MSG_EDIT_FILE, {})
+
+
+def set_msg_edit(oid, orig, new=None):
+    """배송메세지 지우기(new="")·고치기(new=글)·되돌리기(new=None). 택배 파일에만 적용됨"""
+    edits = load_msg_edits()
+    if new is None or new == orig:
+        edits.pop(oid, None)
+    else:
+        edits[oid] = {"orig": orig, "new": new, "time": dt.datetime.now().isoformat(timespec="seconds")}
+    write_json(MSG_EDIT_FILE, edits)
+    log.info(f"[배송메세지] {oid} " + ("되돌림" if new is None or new == orig else "지움" if not new.strip() else "고침"))
+
+
+def msg_state(row):
+    """확인 목록 표시용: (주문번호, 원래 메세지, 지금 메세지, 상태 '', 'edited', 'deleted')"""
+    return row["orderNo"], row.get("origNote", row["note"]), row["note"], row.get("msgState", "")
+
+
+def apply_msg_edits(a, warnings):
+    """지우거나 고친 배송메세지를 택배 줄에 적용. 그사이 고객이 카페24에서 메세지를 바꿨으면 적용하지 않고 알림"""
+    edits = load_msg_edits()
+    if not edits:
+        return
+    stale = []
+    for r in a["rows"]:
+        e = edits.get(r["orderNo"]) if not r.get("extra") else None
+        if not e:
+            continue
+        r.setdefault("origNote", r["note"])
+        if r["origNote"] != e["orig"]:
+            stale.append(r["orderNo"])
+            warnings.append(f"{r['orderNo']}: 고객이 카페24에서 배송메세지를 바꿔서, 지우거나 고친 내용을 적용하지 않았습니다.\n"
+                            f"지금 메세지: {r['origNote']}")
+            continue
+        new = str(e["new"] or "").strip()
+        r["note"] = new if new else "0"
+        r["msgState"] = "edited" if new else "deleted"
+    if stale:
+        for oid in stale:
+            edits.pop(oid, None)
+        write_json(MSG_EDIT_FILE, edits)
+
+
+def msg_lines(a):
+    """'중요 배송메세지 확인' 칸에 들어갈 글 (지운 메세지는 표시)"""
+    return "\n".join(f"{r['orderNo']} / " + ("(배송메세지 지움)" if r.get("msgState") == "deleted" else r["note"])
+                     for r in a["messages"])
+
+
 def _delete_extras(url, extra, warnings):
     """택배 파일에 넣은 추가배송을 구글 시트에서 한 건씩 지움 (실패한 건은 기록하고 알림)"""
     import courier as C
@@ -821,7 +875,10 @@ def make_courier(cfg, token, ids, create=True, progress=None):
 
     t_sheet = time.time() - t0
     a = C.analyze(rows, extra, blacklist)
-    result = {"analysis": a, "texts": C.summary_texts(a), "popup": C.popup_text(a), "path": None,
+    apply_msg_edits(a, warnings)                       # 택배 탭에서 지우거나 고친 배송메세지
+    texts = C.summary_texts(a)
+    texts["중요 배송메세지 확인"] = msg_lines(a)
+    result = {"analysis": a, "texts": texts, "popup": C.popup_text(a), "path": None,
               "excluded": excluded, "orders": orders, "rows": rows, "warnings": warnings,
               "split_orders": split_n, "split_rows": sum(1 for r in rows if r.get("_split"))}
     if not create:
@@ -832,6 +889,11 @@ def make_courier(cfg, token, ids, create=True, progress=None):
     log.info(f"[택배 파일 시간] 카페24 {t_cafe:.1f}초 · 구글 시트까지 {t_sheet:.1f}초 · 파일 저장까지 {time.time() - t0:.1f}초"
              f" (주문 {len(ids)}건)")
     _delete_extras(url, extra, warnings)
+    edits = load_msg_edits()                           # 파일에 넣었으니 그 주문의 메세지 수정 기록은 지움
+    if any(o["order_id"] in edits for o in orders):
+        for o in orders:
+            edits.pop(o["order_id"], None)
+        write_json(MSG_EDIT_FILE, edits)
     now = dt.datetime.now().isoformat(timespec="seconds")
     done = read_json(COURIER_DONE_FILE, {})
     done.update({o["order_id"]: now for o in orders})

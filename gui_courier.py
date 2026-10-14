@@ -8,10 +8,11 @@ import order_print as op
 from gui_schedule import hint
 import theme as T
 
+MSG = "중요 배송메세지 확인"
 BOXES = ["묶음배송 확인", "중요 배송메세지 확인", "블랙리스트·경계대상", "추가배송 포함", "제주도 확인", "주소 '~' 변경 확인"]
 BOX_HINTS = {
     "묶음배송 확인": "이름·주소가 같은 주문 (택배 파일에 노란색). 롯데택배에 올리면 자동으로 묶입니다.",
-    "중요 배송메세지 확인": "'문 앞' 같은 흔한 메세지를 뺀 나머지 배송메세지입니다.",
+    "중요 배송메세지 확인": "흔한 메세지를 뺀 배송메세지. 우클릭: 지우기·고치기, 두 번 누르면 바로 고치기 (택배 파일에만 반영)",
     "블랙리스트·경계대상": "택배 파일에 빨강(블랙리스트)·파랑(경계대상)으로 표시됩니다.",
     "추가배송 포함": "구글 시트에 등록된 추가배송(재발송 등)입니다. 택배 파일을 만들면 시트에서 지워집니다.",
     "제주도 확인": "제주·서귀포 주소입니다.",
@@ -125,6 +126,16 @@ class CourierTab(ttk.Frame):
             sb = ttk.Scrollbar(box, orient="vertical", command=t.yview); sb.grid(row=1, column=1, sticky="ns")
             t.configure(yscrollcommand=sb.set, state="disabled")
             self.texts[name] = t
+        # 중요 배송메세지: 우클릭(삭제·수정·되돌리기), 두 번 누르면 수정
+        self.msg_rows, self.msg_editable, self._editor = [], False, None
+        mt = self.texts[MSG]
+        mt.tag_configure("deleted", foreground=T.DIM)
+        mt.tag_configure("edited", background=T.HILITE)
+        mt.tag_configure("mark", foreground=T.GREEN_D)
+        mt.tag_configure("cur", background="#F1F1EE")
+        mt.configure(spacing1=3, spacing3=3)             # 고칠 때 입력칸이 윗줄·아랫줄을 가리지 않게
+        mt.bind("<Button-3>", self._msg_menu)
+        mt.bind("<Double-Button-1>", lambda e: (self._msg_edit(self._msg_at(e)), "break")[1])
         put_on_top(self.split_badge.master, self.split_badge)
         self.buttons = [self.b_pre, self.b_make, self.b_rm, self.b_clear]
         self.refresh()
@@ -177,11 +188,138 @@ class CourierTab(ttk.Frame):
         self.auto_preview()
 
     def _fill(self, texts):
+        self._end_edit(False)
+        self.msg_rows, self.msg_editable = [], False
         for name, t in self.texts.items():
             t.configure(state="normal"); t.delete("1.0", "end")
             v = texts.get(name, "")
             t.insert("1.0", v if v else "(없음)")
             t.configure(state="disabled")
+
+    # ---------------------------------------------------------------- 중요 배송메세지 지우기·고치기
+    def _fill_messages(self, r):
+        """미리 확인 결과로 배송메세지 칸을 다시 그림 (지운 줄=회색, 고친 메세지=형광펜). 파일을 만든 뒤에는 보기만"""
+        self._end_edit(False)
+        a = (r or {}).get("analysis")
+        if not a:
+            return
+        self.msg_rows = list(a["messages"])
+        self.msg_editable = not r.get("path")
+        t = self.texts[MSG]
+        t.configure(state="normal"); t.delete("1.0", "end")
+        for i, row in enumerate(self.msg_rows):
+            oid, orig, cur, st = op.msg_state(row)
+            if i:
+                t.insert("end", "\n")
+            start = t.index("end-1c")
+            t.insert("end", f"{oid} / ")
+            shown = "(배송메세지 지움)" if st == "deleted" else str(cur).replace("\n", " ")
+            t.insert("end", shown, ("edited",) if st == "edited" else ())
+            if st == "edited":
+                t.insert("end", " ✎", ("mark",))
+            if st == "deleted":
+                t.tag_add("deleted", start, "end-1c")
+        if not self.msg_rows:
+            t.insert("1.0", "(없음)")
+        t.configure(state="disabled")
+
+    def _msg_at(self, e):
+        t = self.texts[MSG]
+        i = int(t.index(f"@{e.x},{e.y}").split(".")[0]) - 1
+        return i if 0 <= i < len(self.msg_rows) else None
+
+    def _msg_menu(self, e):
+        i = self._msg_at(e)
+        if i is None:
+            return
+        if not self.msg_editable:
+            self.app.flash("이미 만든 택배 파일의 메세지는 바꿀 수 없습니다. 대기 주문 미리 확인에서 바꿔 주세요.")
+            return
+        t = self.texts[MSG]
+        t.tag_remove("cur", "1.0", "end"); t.tag_add("cur", f"{i + 1}.0", f"{i + 1}.end")
+        m = tk.Menu(self, tearoff=0, font=T.f(10))
+        m.add_command(label="배송 메세지 삭제", command=lambda: self._msg_set(i, ""))
+        m.add_command(label="배송 메세지 수정", command=lambda: self._msg_edit(i))
+        if self.msg_rows[i].get("msgState"):
+            m.add_separator()
+            m.add_command(label="원래 메세지로 되돌리기", command=lambda: self._msg_set(i, None))
+        try:
+            m.tk_popup(e.x_root, e.y_root)
+        finally:
+            m.grab_release()
+            self.after(300, lambda: t.tag_remove("cur", "1.0", "end"))
+
+    def _msg_set(self, i, new):
+        """new="" 지우기, 글=고치기, None=되돌리기"""
+        row = self.msg_rows[i]
+        oid, orig, _, _ = op.msg_state(row)
+        if new is not None and new.strip() == str(orig).replace("\n", " ").strip():
+            new = None                                   # 원래와 같으면 되돌리기
+        op.set_msg_edit(oid, orig, None if new is None else new.strip())
+        row["origNote"] = orig
+        if new is None:
+            row["note"] = orig; row.pop("msgState", None)
+            self.app.flash(f"{oid} 배송메세지를 원래대로 되돌렸습니다.")
+        elif not new.strip():
+            row["note"] = "0"; row["msgState"] = "deleted"
+            self.app.flash(f"{oid} 배송메세지를 지웠습니다 (택배 파일에 '0'으로 들어갑니다).")
+        else:
+            row["note"] = new.strip(); row["msgState"] = "edited"
+            self.app.flash(f"{oid} 배송메세지를 고쳤습니다.")
+        self._fill_messages(self.last)
+
+    def _msg_edit(self, i):
+        """그 줄의 배송메세지 부분만 입력칸으로 바꾸고 글자를 블록으로 잡음. Enter·다른 곳 누르기=저장, Esc=취소"""
+        if i is None:
+            return
+        if not self.msg_editable:
+            self.app.flash("이미 만든 택배 파일의 메세지는 바꿀 수 없습니다. 대기 주문 미리 확인에서 바꿔 주세요.")
+            return
+        self._end_edit(True)
+        t = self.texts[MSG]
+        line = i + 1
+        pos = t.search(" / ", f"{line}.0", f"{line}.end")
+        if not pos:
+            return
+        start = f"{pos}+3c"
+        t.see(start); t.update_idletasks()
+        box, line_box = t.bbox(start), t.dlineinfo(start)
+        if not box or not line_box:
+            return
+        x = box[0]
+        y, h = line_box[1], line_box[3]                  # 줄 전체 높이에 맞춤
+        row = self.msg_rows[i]
+        _, orig, cur, st = op.msg_state(row)
+        value = str(orig if st == "deleted" else cur).replace("\n", " ")
+        ent = tk.Entry(t, font=T.f(9), relief="flat", bd=0, bg=T.CARD, fg=T.INK, highlightthickness=1,
+                       highlightbackground=T.GREEN, highlightcolor=T.GREEN, selectbackground=T.HILITE,
+                       selectforeground=T.INK, insertwidth=1)
+        ent.insert(0, value)
+        ent.place(x=x - 2, y=y, width=max(120, t.winfo_width() - x - 6), height=h, bordermode="outside")
+        ent.focus_set()
+        ent.select_range(0, "end"); ent.icursor("end")
+        self._editor = (ent, i)
+        ent.bind("<Return>", lambda e: (self._end_edit(True), "break")[1])
+        ent.bind("<KP_Enter>", lambda e: (self._end_edit(True), "break")[1])
+        ent.bind("<Escape>", lambda e: (self._end_edit(False), "break")[1])
+        ent.bind("<FocusOut>", lambda e: self.after(1, lambda: self._end_edit(True)))
+
+    def _end_edit(self, save):
+        if not self._editor:
+            return
+        ent, i = self._editor
+        self._editor = None
+        try:
+            val = ent.get()
+            ent.destroy()
+        except tk.TclError:
+            return
+        if save and i < len(self.msg_rows):
+            row = self.msg_rows[i]
+            _, orig, cur, st = op.msg_state(row)
+            before = str(orig if st == "deleted" else cur).replace("\n", " ")
+            if val.strip() != before.strip():          # 안 바꿨으면 그대로 (지운 줄은 [원래 메세지로 되돌리기]로)
+                self._msg_set(i, val)
 
     def copy(self, name):
         v = self.texts[name].get("1.0", "end").strip()
@@ -232,6 +370,7 @@ class CourierTab(ttk.Frame):
                 return                      # 그사이 택배 파일을 만들거나 다시 미리 봄
             self.last = r
             self._fill(r["texts"])
+            self._fill_messages(r)
             a = r["analysis"]
             self.res_title.configure(text=f"확인 목록 — 대기 주문 {len(r['orders'])}건 자동 미리 확인 (파일 안 만듦)")
             self.stat.configure(text=f"대기 주문 {len(r['orders'])}건 · 묶음배송 {len(a['bundle'])}묶음 · "
@@ -282,6 +421,7 @@ class CourierTab(ttk.Frame):
                 self.app.label_tab.waiting_preview(r)
             a = r["analysis"]
             self._fill(r["texts"])
+            self._fill_messages(r)
             self.res_title.configure(text="확인 목록 — " + ("방금 만든 택배 파일" if create else "미리 확인 (파일 안 만듦)"))
             n_orders = len(r["orders"])
             sp = r.get("split_orders", 0)
