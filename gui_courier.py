@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """통합 창 - '택배·라벨' 탭 (택배 발송용 파일, 확인 목록, 라벨)"""
+import datetime as dt
 import tkinter as tk
 from pathlib import Path
 from tkinter import ttk, messagebox
@@ -349,12 +350,20 @@ class CourierTab(ttk.Frame):
         """대기 주문으로 확인 목록과 라벨을 조용히 미리보기 (팝업 없음, 대기 목록이 바뀌었을 때만)"""
         cand = op.courier_candidates()
         ids = [o["order_id"] for o, _ in cand]
-        key = (tuple(ids), op.split_on())
+        today = dt.date.today().isoformat()
+        key = (tuple(ids), op.split_on(), today)            # 날짜가 바뀌면 다시 확인
         if not ids or self.app.busy or (key == self._auto_key and not force):
             if not ids and key != self._auto_key:
                 self._auto_key = key
-                self.res_title.configure(text="확인 목록 — 대기 주문 없음")
-                self._fill({})
+                # 대기 주문이 없으면 오늘 마지막으로 만든 택배 파일의 확인 목록을 그대로 보여 줌 (다음 날이면 비움)
+                h = next((h for h in op.load_courier_history() if str(h.get("time", "")).startswith(today) and not h.get("extra_only")), None)
+                if h:
+                    self._fill(h.get("texts", {}))
+                    self.last = {"path": h["file"]}
+                    self.res_title.configure(text=f"확인 목록 — {h['time'][5:16].replace('T', ' ')} 만든 택배 파일")
+                else:
+                    self.res_title.configure(text="확인 목록 — 대기 주문 없음")
+                    self._fill({})
                 self.app.label_tab.waiting_preview(None)
             return
         self._auto_key = key
@@ -414,7 +423,7 @@ class CourierTab(ttk.Frame):
 
         def done(r):
             self.last = r
-            self._auto_key = None if create else (tuple(ids), op.split_on())
+            self._auto_key = None if create else (tuple(ids), op.split_on(), dt.date.today().isoformat())
             if create:
                 self.app.label_tab.set_target(rows=r["rows"], title=f"방금 만든 택배 파일의 주문 {len(r['orders'])}건")
             else:
