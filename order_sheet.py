@@ -408,6 +408,62 @@ def _story(v, highlight=False):
     return story, tq
 
 
+PLACE_LABEL = {"NCHECKOUT": "네이버페이", "shopn": "스마트스토어", "coupang": "쿠팡", "mobile": "모바일",
+               "self": "PC쇼핑몰", "cafe24": "PC쇼핑몰"}
+BADGE_LEFT = 31 * mm        # '주문상세정보' 제목 오른쪽부터
+BADGE_TOP = 5.2 * mm        # 종이 맨 위에서 (프린터가 못 찍는 가장자리 피함)
+BADGE_H = 10.6 * mm         # 아래 주문번호 칸(맨 위에서 16.85mm)과 겹치지 않는 높이
+
+
+def _fit_text(c, text, font, size, width):
+    while text and pdfmetrics.stringWidth(text, font, size) > width:
+        text = text[:-1]
+    return text
+
+
+def _draw_badge(c, v):
+    """작업용(오른쪽) 주문서 제목 옆 빈자리에 크게 (왼쪽부터): 주문경로 마크 · 수령자 · 주문 날짜/시간 · 주문번호.
+    테두리 없이 캔버스에 따로 그리므로 아래 주문서 양식(칸·줄 위치)은 그대로."""
+    x0 = M + BADGE_LEFT
+    top = HALF_H - BADGE_TOP
+    y0 = top - BADGE_H
+    mid = y0 + BADGE_H / 2
+    c.saveState()
+    c.setFillColor(colors.black)
+    # ① 주문경로 이름(왼쪽) + 마크
+    label = PLACE_LABEL.get(v["place"], v["place"] or "기타")
+    ls = 7
+    while ls > 5 and pdfmetrics.stringWidth(label, "KRB", ls) > 13 * mm:
+        ls -= 0.2
+    c.setFont("KRB", ls)
+    c.drawRightString(x0 + 13 * mm, mid - ls * 0.36, _fit_text(c, label, "KRB", ls, 13 * mm))
+    tag = icon_img(v["place"])
+    if tag:
+        path = tag.split('src="', 1)[1].split('"', 1)[0]
+        c.drawImage(path, x0 + 14.2 * mm, mid - 3.3 * mm, 6.6 * mm, 6.6 * mm, mask="auto")
+    # ② 수령자 이름 (가장 크게, 길면 글자를 줄이고 그래도 길면 …)
+    x, room = x0 + 23 * mm, 27 * mm
+    name, size = v["rcv"]["name"] or "-", 18
+    while size > 12 and pdfmetrics.stringWidth(name, "KRB", size) > room:
+        size -= 1
+    if pdfmetrics.stringWidth(name, "KRB", size) > room:
+        name = _fit_text(c, name, "KRB", size, room - pdfmetrics.stringWidth("…", "KRB", size)) + "…"
+    c.setFont("KRB", size); c.drawString(x, mid - size * 0.36, name)
+    # ③ 주문 날짜(위) / 시간(아래, 굵게)
+    x = x0 + 52 * mm
+    od = str(v["order_date"])
+    day, hm = (f"{od[:4]}.{od[5:7]}.{od[8:10]}", od[11:16]) if len(od) >= 16 else (od, "")
+    c.setFont("KR", 8.5); c.drawString(x, mid + 1.2 * mm, day)
+    c.setFont("KRB", 13); c.drawString(x, y0 + 1.3 * mm, hm)
+    # ④ 주문번호: '-' 앞(위, 작게) / 뒤(아래, 크고 굵게)
+    x = x0 + 72.5 * mm
+    oid = str(v["order_id"])
+    head, tail = (oid.split("-", 1)[0] + "-", oid.split("-", 1)[1]) if "-" in oid else ("", oid)
+    c.setFont("KR", 8.5); c.drawString(x, mid + 1.2 * mm, head)
+    c.setFont("KRB", 15); c.drawString(x, y0 + 1.3 * mm, tail)
+    c.restoreState()
+
+
 class _OrderStart(Flowable):
     """주문서 한 건의 시작 표시 (보이지 않음). 쪽 번호 계산에 사용."""
     def __init__(self, idx):
@@ -429,7 +485,7 @@ class _OrdersDoc(BaseDocTemplate):
                 self.progress(f.idx + 1)
 
 
-def _single_copy_pdf(views, totals, progress=None, highlight=False):
+def _single_copy_pdf(views, totals, progress=None, highlight=False, badge=False):
     """모든 주문서를 주문서 1부 크기로 한 PDF에 연속으로 그림 (글꼴·사진을 한 번만 넣어 용량 절약)."""
     buf = io.BytesIO()
     doc = _OrdersDoc(buf, pagesize=(HALF_W, HALF_H))
@@ -442,6 +498,8 @@ def _single_copy_pdf(views, totals, progress=None, highlight=False):
         k = d.page - d.start + 1
         d.counts[d.cur] = k
         T = totals.get(d.cur, "?")
+        if badge and k == 1:     # 작업용 주문서 첫 장: 제목 옆에 크게 찾기용 표시
+            _draw_badge(c, v)
         c.saveState()
         if k > 1:   # 여러 장짜리 주문의 2쪽부터만 맨 위에 '계속' 표시
             c.setFont("KRB", 7.5); c.setFillColor(colors.black)
@@ -511,12 +569,11 @@ def build_orders_pdf(views, out_path, progress=None, end_info=None, divider=None
     _, totals = _single_copy_pdf(views, {}, None)            # 1회차: 주문별 쪽수 계산
     data, _ = _single_copy_pdf(views, totals, step)           # 2회차: 쪽수 넣어서 완성
     src = PdfReader(io.BytesIO(data))
-    marked = src                                               # 오른쪽 주문서 (형광펜 있으면 따로)
-    if any(it["qty"] >= 2 for v in views for it in v["items"]):
-        data_hl, _ = _single_copy_pdf(views, totals, None, highlight=True)
-        hl = PdfReader(io.BytesIO(data_hl))
-        if len(hl.pages) == len(src.pages):                   # 색만 칠하므로 쪽수가 같아야 정상
-            marked = hl
+    marked = src                                               # 오른쪽(작업용) 주문서: 형광펜 + 찾기용 표시
+    data_hl, _ = _single_copy_pdf(views, totals, None, highlight=True, badge=True)
+    hl = PdfReader(io.BytesIO(data_hl))
+    if len(hl.pages) == len(src.pages):                       # 색·표시만 더하므로 쪽수가 같아야 정상
+        marked = hl
     w = PdfWriter()
     cut = sum(totals.get(i, 1) for i in range(divider["index"])) if divider else -1   # 구분 용지 넣을 자리
     for n, hp in enumerate(src.pages):
