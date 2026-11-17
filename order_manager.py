@@ -447,10 +447,13 @@ class App(tk.Tk):
             self.hist.heading(c, text=txt); self.hist.column(c, width=w, anchor="center" if c in ("count", "kind") else "w")
         self.hist.grid(row=0, column=0, columnspan=2, sticky="nsew")
         self.hist.bind("<<TreeviewSelect>>", lambda e: self.show_batch())
-        b3 = ttk.Button(hf, text="선택한 묶음 다시 뽑기", command=self.reprint_batch)
-        b3.grid(row=1, column=1, sticky="e", pady=(6, 0))
+        bb = ttk.Frame(hf); bb.grid(row=1, column=1, sticky="e", pady=(6, 0))
+        ttk.Button(bb, text="이어서 뽑기", command=self.resume_batch).pack(side="left")
+        b3 = ttk.Button(bb, text="선택한 묶음 다시 뽑기", command=self.reprint_batch)
+        b3.pack(side="left", padx=(6, 0))
         hint(hf, "최근 30일 동안의 출력과 기준 조정 기록입니다. 줄을 누르면 아래에 주문 목록이 보이고, "
-                 "용지 걸림 등으로 안 나왔을 때 [선택한 묶음 다시 뽑기]로 그대로 다시 인쇄합니다.",
+                 "용지 걸림 등으로 안 나왔을 때 [선택한 묶음 다시 뽑기]로 그대로 다시 인쇄합니다. "
+                 "중간에 멈춘 묶음(⚠)은 [이어서 뽑기]로 마지막으로 나온 주문 다음부터 뽑습니다.",
              row=1, column=0, sticky="w", pady=(6, 0), wrap=430)
         self.blist = ttk.Treeview(hf, columns=("oid", "place", "buyer", "rcv", "pay"), show="headings", height=8)
         for c, txt, w in (("oid", "주문번호", 150), ("place", "경로", 90), ("buyer", "주문자", 80),
@@ -512,6 +515,10 @@ class App(tk.Tk):
         acked = bool(st.get("acknowledged"))       # 결과 창이나 경고 띠에서 [확인]을 눌렀으면 경고는 다시 띄우지 않음
         if not st.get("final"):
             text, on = f"{slot} 자동 출력 진행 중", True
+            if st.get("stalled"):                       # 프린터가 멈춰서 종이를 기다리는 중
+                text, on = f"{slot} 자동 출력 · 프린터 멈춤", False
+                self._alerts["auto"] = (f"[프린터 멈춤] {', '.join(st.get('printer_issues') or ['프린터 확인 필요'])} — "
+                                        "종이를 넣고 프린터의 [OK]를 누르면 이어서 나옵니다 (최대 1시간 기다림, 취소는 [자동 출력 중지])")
         elif res in ("ok", "unknown"):
             text, on = f"오늘 {slot} 자동 출력 완료 · {st.get('count', 0)}건", True
         elif res == "none":
@@ -525,7 +532,9 @@ class App(tk.Tk):
             text, on = (f"오늘 {slot} 자동 출력 · 확인함" if acked else f"오늘 {slot} 자동 출력 확인 필요"), False
             detail = ", ".join(st.get("printer_issues") or []) or str(st.get("message", "")).splitlines()[0][:60]
             if not acked:
-                self._alerts["auto"] = f"[자동 출력] {slot} 출력에 문제가 있었습니다: {detail} — 주문서가 모두 나왔는지 확인하세요"
+                self._alerts["auto"] = (f"[자동 출력] {slot} 출력이 프린터 문제({detail})로 중간에 멈췄습니다 — 종이를 넣어도 더 안 나오면 "
+                                        "출력 탭 → 출력 기록에서 그 묶음을 골라 [이어서 뽑기]" if st.get("interrupted") else
+                                        f"[자동 출력] {slot} 출력에 문제가 있었습니다: {detail} — 주문서가 모두 나왔는지 확인하세요")
         self.result_pill.configure(text=f" {text} ", bg=T.GREEN_L if on else "#FDEBEC" if res in ("problem", "fail")
                                    else "#FFF1E6" if res == "stopped" else "#EFEFEC",
                                    fg=T.GREEN_D if on else T.RED if res in ("problem", "fail")
@@ -854,7 +863,9 @@ class App(tk.Tk):
         fmt = lambda o: f"{o.get('order_id', '')} {o.get('buyer', '')}"
         for i, b in enumerate(op.load_history()):
             f, l = (b["orders"][0], b["orders"][-1]) if b["orders"] else ({}, {})
-            self.hist.insert("", "end", iid=str(i), values=(b["time"][5:16].replace("T", " "), b["kind"],
+            kind = b["kind"] + (" ⚠멈춤" if b.get("interrupted") and not b["interrupted"].get("resumed")
+                                else " (이어서 뽑음)" if b.get("interrupted") else "")
+            self.hist.insert("", "end", iid=str(i), values=(b["time"][5:16].replace("T", " "), kind,
                                                           b["count"] if b["kind"] != "기준 조정" else "-",
                                                           fmt(f) if b["kind"] != "기준 조정" else "", fmt(l)))
 
@@ -933,6 +944,18 @@ class App(tk.Tk):
         else:   # 보관 기간이 지나 PDF가 지워졌으면 카페24에서 다시 불러와 만듦
             ids = [o["order_id"] for o in b["orders"]]
             self._reprint_ids(ids, "다시 뽑기")
+
+    def resume_batch(self):
+        sel = self.hist.selection()
+        if not sel:
+            messagebox.showinfo("이어서 뽑기", "위의 출력 기록에서 중간에 멈춘 묶음을 먼저 눌러 주세요.")
+            return
+        b = op.load_history()[int(sel[0])]
+        if not b.get("pmap") or not Path(b.get("pdf", "")).exists():
+            messagebox.showinfo("이어서 뽑기", "이 묶음은 이어서 뽑을 정보가 없습니다 (예전 버전 출력이거나 주문서 PDF 보관 기간이 지났습니다).\n"
+                                           "[선택한 묶음 다시 뽑기]나 주문 찾기 탭의 [선택한 주문 다시 뽑기]를 쓰세요.")
+            return
+        ResumeDialog(self, b)
 
     def reprint_selected(self):
         ids = list(self.olist.selection())
@@ -1073,6 +1096,108 @@ class AddCourierDialog(tk.Toplevel):
         mark = self.mark.get()
         self.destroy()
         self.on_ok(mark)
+
+
+class ResumeDialog(tk.Toplevel):
+    """이어서 뽑기: 인쇄된 순서대로 주문을 보여 주고, 마지막으로 나온 주문을 고르면 그다음부터 끝까지 인쇄"""
+
+    def __init__(self, app, b):
+        super().__init__(app)
+        self.app, self.b = app, b
+        self.title("이어서 뽑기")
+        self.configure(background=T.CARD)
+        self.transient(app)
+        names = {o["order_id"]: o for o in b["orders"]}
+        self.rows, page = [], 1
+        for oid, n in b["pmap"]:
+            self.rows.append((oid, page, n))
+            page += n
+        self.total = sum(n for _, n in b["pmap"])
+        f = ttk.Frame(self, padding=18); f.pack(fill="both", expand=True)
+        f.columnconfigure(0, weight=1); f.rowconfigure(3, weight=1)
+        when = b["time"][5:16].replace("T", " ")
+        ttk.Label(f, text=f"{when} {b['kind']} 출력 · 주문 {len(self.rows)}건 · {self.total}장", style="Title.TLabel").grid(row=0, column=0, sticky="w")
+        it = b.get("interrupted") or {}
+        msg = (f"⚠ 중간에 멈춤으로 기록됨: {it.get('reason', '')}" + (f" · 프린터가 알려준 인쇄 장 수 {it['printed']}장" if it.get("printed") else "")
+               if it else "이 묶음은 멈춤 기록이 없습니다. 실제로 덜 나왔을 때만 쓰세요.")
+        tk.Label(f, text=msg, bg=T.CARD, fg=T.ORANGE, font=T.f(10, True), anchor="w").grid(row=1, column=0, sticky="we", pady=(4, 0))
+        hint(f, "프린터에서 마지막으로 나온 종이의 주문번호(오른쪽 위 큰 번호)를 아래에서 골라 주세요. 그 다음 주문부터 끝까지 뽑습니다.\n"
+                "종이를 넣고 프린터의 [OK]를 눌렀는데도 더 나오지 않을 때만 쓰세요 (아직 프린터에 남아 있으면 두 번 나올 수 있어요).",
+             row=2, column=0, sticky="w", pady=(4, 6), wrap=620)
+        cols = (("no", "순서", 45), ("pages", "장", 80), ("oid", "주문번호", 150), ("rcv", "수령자", 90), ("place", "경로", 90))
+        self.tv = ttk.Treeview(f, columns=[c[0] for c in cols], show="headings", height=14, selectmode="browse")
+        for c, t, w in cols:
+            self.tv.heading(c, text=t); self.tv.column(c, width=w, anchor="center" if c in ("no", "pages") else "w")
+        self.tv.grid(row=3, column=0, sticky="nsew")
+        sb = ttk.Scrollbar(f, orient="vertical", command=self.tv.yview); sb.grid(row=3, column=1, sticky="ns")
+        self.tv.configure(yscrollcommand=sb.set)
+        for i, (oid, start, n) in enumerate(self.rows):
+            o = names.get(oid, {})
+            self.tv.insert("", "end", iid=str(i), values=(i + 1, f"{start}" if n == 1 else f"{start}~{start + n - 1}",
+                                                          oid, o.get("receiver", ""), o.get("place", "")))
+        self.again = tk.BooleanVar(value=False)
+        ttk.Checkbutton(f, text="고른 주문도 다시 뽑기 (그 주문서가 중간에 잘렸으면)", variable=self.again,
+                        command=self.update_info).grid(row=4, column=0, sticky="w", pady=(8, 0))
+        self.info = tk.Label(f, text="", bg=T.CARD, fg=T.GREEN_D, font=T.f(11, True), anchor="w")
+        self.info.grid(row=5, column=0, sticky="we", pady=(6, 0))
+        bf = ttk.Frame(f); bf.grid(row=6, column=0, columnspan=2, sticky="we", pady=(12, 0))
+        self.go = ttk.Button(bf, text="이어서 뽑기", style="Accent.TButton", command=self.ok); self.go.pack(side="right")
+        ttk.Button(bf, text="처음부터 모두 뽑기", command=self.from_start).pack(side="left")
+        ttk.Button(bf, text="취소", command=self.destroy).pack(side="right", padx=6)
+        self.tv.bind("<<TreeviewSelect>>", lambda e: self.update_info())
+        # 프린터가 알려준 장 수로 '여기까지 나온 것 같다'를 미리 고름
+        guess = it.get("printed")
+        if guess:
+            idx = next((i for i, (_, st, n) in enumerate(self.rows) if st + n - 1 >= int(guess)), None)
+            if idx is not None:
+                self.tv.selection_set(str(idx)); self.tv.see(str(idx))
+                _, st, n = self.rows[idx]
+                if st + n - 1 > int(guess):          # 그 주문서가 여러 장인데 중간까지만 나왔으면 그 주문부터
+                    self.again.set(True)
+        self.update_info()
+        self.update_idletasks()
+        x = app.winfo_rootx() + (app.winfo_width() - self.winfo_width()) // 2
+        y = app.winfo_rooty() + 60
+        self.geometry(f"+{max(0, x)}+{max(0, y)}")
+        self.grab_set()
+
+    def _start(self):
+        sel = self.tv.selection()
+        if not sel:
+            return None
+        i = int(sel[0]) + (0 if self.again.get() else 1)
+        if i >= len(self.rows):
+            return "end"
+        return i
+
+    def update_info(self):
+        i = self._start()
+        if i is None:
+            self.info.configure(text="마지막으로 나온 주문을 골라 주세요."); self.go.state(["disabled"]); return
+        if i == "end":
+            self.info.configure(text="고른 주문이 마지막 주문이라 더 뽑을 것이 없습니다."); self.go.state(["disabled"]); return
+        oid, st, _ = self.rows[i]
+        self.info.configure(text=f"→ {i + 1}번째 주문 {oid}부터 끝까지 {self.total - st + 1}장을 뽑습니다")
+        self.go.state(["!disabled"])
+
+    def from_start(self):
+        self._print(0)
+
+    def ok(self):
+        i = self._start()
+        if isinstance(i, int):
+            self._print(i)
+
+    def _print(self, i):
+        oid, st, _ = self.rows[i]
+        if not messagebox.askyesno("이어서 뽑기", f"{oid}부터 끝까지 {self.total - st + 1}장을 인쇄할까요?\n\n"
+                                              "컴퓨터 인쇄 대기열에 남아 있는 이 묶음은 먼저 지웁니다.", parent=self):
+            return
+        b, app = self.b, self.app
+        self.destroy()
+        app.bg(lambda: op.print_resume(app.cfg, b, st, oid),
+               lambda n: (messagebox.showinfo("이어서 뽑기", f"{n}장을 프린터로 보냈습니다."), app.show_history()),
+               "이어서 뽑기 인쇄 중...")
 
 
 class RevertDialog(tk.Toplevel):

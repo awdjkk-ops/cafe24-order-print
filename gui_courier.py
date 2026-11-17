@@ -10,13 +10,14 @@ from gui_schedule import hint
 import theme as T
 
 MSG = "중요 배송메세지 확인"
-BOXES = ["묶음배송 확인", "중요 배송메세지 확인", "블랙리스트·경계대상", "추가배송 포함", "제주도 확인", "주소 '~' 변경 확인"]
+BOXES = ["묶음배송 확인", "제주도 확인", "중요 배송메세지 확인", "수제 제작 상품 확인", "추가배송 포함", "블랙리스트·경계대상", "주소 '~' 변경 확인"]
 BOX_HINTS = {
     "묶음배송 확인": "이름·주소가 같은 주문 (택배 파일에 노란색). 롯데택배에 올리면 자동으로 묶입니다.",
     "중요 배송메세지 확인": "흔한 메세지를 뺀 배송메세지. 우클릭: 지우기·고치기, 두 번 누르면 바로 고치기 (택배 파일에만 반영)",
     "블랙리스트·경계대상": "택배 파일에 빨강(블랙리스트)·파랑(경계대상)으로 표시됩니다.",
     "추가배송 포함": "구글 시트에 등록된 추가배송(재발송 등)입니다. 택배 파일을 만들면 시트에서 지워집니다.",
     "제주도 확인": "제주·서귀포 주소입니다.",
+    "수제 제작 상품 확인": "관리 탭에 등록한 수제 제작 코드의 상품 (주문번호 / 수령인 / 상품명 / 옵션 / 개수)",
     "주소 '~' 변경 확인": "롯데택배가 '~'를 못 읽어서 '-'로 바꾼 주소입니다.",
 }
 
@@ -117,16 +118,17 @@ class CourierTab(ttk.Frame):
         for i, name in enumerate(BOXES):
             box = ttk.LabelFrame(right, text=f" {name} ", padding=6)
             box.grid(row=i + 1, column=0, sticky="nsew", pady=(6, 0))
-            right.rowconfigure(i + 1, weight=6 if name == "중요 배송메세지 확인" else 2 if name == "묶음배송 확인" else 1)
+            right.rowconfigure(i + 1, weight=2 if name in ("중요 배송메세지 확인", "묶음배송 확인", "수제 제작 상품 확인") else 1)
             box.columnconfigure(0, weight=1); box.rowconfigure(1, weight=1)
             head = ttk.Frame(box); head.grid(row=0, column=0, columnspan=2, sticky="we")
             ttk.Label(head, text=BOX_HINTS[name], style="Hint.TLabel").pack(side="left")
             ttk.Button(head, text="복사", width=6, command=lambda n=name: self.copy(n)).pack(side="right")
-            t = T.text_box(tk.Text(box, height=16 if name == "중요 배송메세지 확인" else 3, wrap="none"))
+            t = T.text_box(tk.Text(box, height=5 if name == "중요 배송메세지 확인" else 3, wrap="none"))
             t.grid(row=1, column=0, sticky="nsew")
             sb = ttk.Scrollbar(box, orient="vertical", command=t.yview); sb.grid(row=1, column=1, sticky="ns")
             t.configure(yscrollcommand=sb.set, state="disabled")
             self.texts[name] = t
+            t.tag_configure("done", background=T.GREEN_L)      # [확인 완료]를 누른 줄
         # 중요 배송메세지: 우클릭(삭제·수정·되돌리기), 두 번 누르면 수정
         self.msg_rows, self.msg_editable, self._editor = [], False, None
         mt = self.texts[MSG]
@@ -195,7 +197,55 @@ class CourierTab(ttk.Frame):
             t.configure(state="normal"); t.delete("1.0", "end")
             v = texts.get(name, "")
             t.insert("1.0", v if v else "(없음)")
+            if v:
+                self._add_checks(name)
             t.configure(state="disabled")
+
+    # ---------------------------------------------------------------- 줄마다 [확인 완료] (그날만 기억)
+    CHECK_FILE = op.DATA / "courier_checks.json"
+
+    def _check_key(self, name, line):
+        line = line.replace(" ✎", "").strip()
+        return line.split(" / ")[0] if name == MSG else line      # 배송메세지는 고치면 글이 바뀌므로 주문번호로
+
+    def _load_checks(self):
+        d = op.read_json(self.CHECK_FILE, {})
+        return d.get("done", {}) if d.get("date") == dt.date.today().isoformat() else {}
+
+    def _save_check(self, name, key, on):
+        done = self._load_checks()
+        keys = set(done.get(name, []))
+        (keys.add if on else keys.discard)(key)
+        done[name] = sorted(keys)
+        op.write_json(self.CHECK_FILE, {"date": dt.date.today().isoformat(), "done": done})
+
+    def _add_checks(self, name):
+        """줄 끝마다 [확인 완료] — 누르면 줄 전체가 초록색, 다시 누르면 취소. 다음 날이면 모두 지워짐"""
+        t = self.texts[name]
+        done = set(self._load_checks().get(name, []))
+        state = t.cget("state")
+        t.configure(state="normal")
+        n = int(t.index("end-1c").split(".")[0])
+        for i in range(1, n + 1):
+            line = t.get(f"{i}.0", f"{i}.end")
+            if not line.strip() or line.strip() == "(없음)":
+                continue
+            key = self._check_key(name, line)
+            lb = tk.Label(t, text="확인 완료", font=T.f(8, True), padx=7, pady=0, cursor="hand2")
+
+            def paint(on, i=i, lb=lb):
+                (t.tag_add if on else t.tag_remove)("done", f"{i}.0", f"{i}.0 lineend +1c")
+                lb.configure(text="✓ 확인 완료" if on else "확인 완료", bg=T.GREEN if on else "#EFEFEC",
+                             fg="white" if on else T.MUTED)
+
+            def toggle(e, i=i, key=key, paint=paint):
+                on = "done" not in t.tag_names(f"{i}.0")
+                paint(on)
+                self._save_check(name, key, on)
+            lb.bind("<Button-1>", toggle)
+            t.window_create(f"{i}.end", window=lb, padx=10, align="center")
+            paint(key in done)
+        t.configure(state=state)
 
     # ---------------------------------------------------------------- 중요 배송메세지 지우기·고치기
     def _fill_messages(self, r):
@@ -222,6 +272,8 @@ class CourierTab(ttk.Frame):
                 t.tag_add("deleted", start, "end-1c")
         if not self.msg_rows:
             t.insert("1.0", "(없음)")
+        else:
+            self._add_checks(MSG)
         t.configure(state="disabled")
 
     def _msg_at(self, e):

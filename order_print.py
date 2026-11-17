@@ -777,6 +777,35 @@ def msg_lines(a):
                      for r in a["messages"])
 
 
+HANDMADE_FILE = DATA / "handmade_codes.json"      # 수제 제작 상품 코드 [{code, memo, added}] (관리 탭)
+
+
+def load_handmade():
+    return read_json(HANDMADE_FILE, [])
+
+
+def save_handmade(items):
+    write_json(HANDMADE_FILE, items)
+
+
+def handmade_lines(orders):
+    """수제 제작 코드의 상품이 든 주문: '주문번호 / 수령인 / 상품명 / 옵션 / 개수' 줄들"""
+    codes = {str(e.get("code", "")).upper() for e in load_handmade()} - {""}
+    if not codes:
+        return ""
+    import order_sheet
+    lines = []
+    for o in orders:
+        rcv = (o.get("receivers") or [{}])[0] or {}
+        for it in o.get("items") or []:
+            name = it.get("product_name") or it.get("product_name_default") or ""
+            if product_code(name) in codes:
+                qty = int(float(it.get("quantity") or 0))
+                lines.append(f"{o.get('order_id', '')} / {rcv.get('name', '')} / {name} / "
+                             f"{order_sheet._option_text(it) or '-'} / {qty}개")
+    return "\n".join(lines)
+
+
 def _delete_extras(url, extra, warnings):
     """택배 파일에 넣은 추가배송을 구글 시트에서 한 건씩 지움 (실패한 건은 기록하고 알림)"""
     import courier as C
@@ -878,6 +907,7 @@ def make_courier(cfg, token, ids, create=True, progress=None):
     apply_msg_edits(a, warnings)                       # 택배 탭에서 지우거나 고친 배송메세지
     texts = C.summary_texts(a)
     texts["중요 배송메세지 확인"] = msg_lines(a)
+    texts["수제 제작 상품 확인"] = handmade_lines(orders)
     result = {"analysis": a, "texts": texts, "popup": C.popup_text(a), "path": None,
               "excluded": excluded, "orders": orders, "rows": rows, "warnings": warnings,
               "split_orders": split_n, "split_rows": sum(1 for r in rows if r.get("_split"))}
@@ -996,14 +1026,100 @@ def _download_image(session, url):
     return im
 
 
+# ---------------------------------------------------------------- 상품코드로 사진 찾기 (쿠팡 등 카페24 상품과 연결 안 된 주문)
+CODE_MAP_FILE = IMG_DIR / "code_map.json"     # {코드: {"no": 카페24 상품번호 또는 "", "name": 상품명, "t": 찾은 때}}
+CODE_HIT_DAYS, CODE_MISS_DAYS = 7, 1           # 찾은 연결은 7일, 못 찾은 코드는 하루 뒤 다시 찾음
+_CODE_RE = re.compile(r"^\s*([A-Za-z]+[A-Za-z0-9]*\d[A-Za-z0-9]*)\s*-")
+
+
+def product_code(name):
+    """상품명 맨 앞 '-' 앞의 코드 (예: 'SG326-써지컬스틸…' → 'SG326'). 영문+숫자가 아니면 None"""
+    m = _CODE_RE.match(str(name or ""))
+    return m.group(1).upper() if m else None
+
+
+def _zero_variants(code):
+    """숫자 앞 0 개수만 다른 코드 (PDT07 ↔ PDT007 ↔ PDT7)"""
+    m = re.match(r"^([A-Z]+)(0*)(\d+)(.*)$", code)
+    if not m:
+        return []
+    head, zeros, num, rest = m.groups()
+    if num.startswith("0"):
+        return []
+    return [f"{head}{'0' * z}{num}{rest}" for z in range(0, 3) if z != len(zeros)]
+
+
+def _pick_product(products, code):
+    """상품명 코드가 정확히 같고, '단종'이 없고, 판매 중인 상품 중 가장 최근(번호 큰) 상품. 없으면 None(사진 없음)"""
+    cands = [p for p in products if product_code(p.get("product_name")) == code
+             and "단종" not in str(p.get("product_name")) and p.get("selling") == "T"]
+    return max(cands, key=lambda p: int(p.get("product_no") or 0)) if cands else None
+
+
+def resolve_codes(cfg, token, codes):
+    """코드 → 카페24 상품번호. 카페24 상품명을 코드로 검색해서 맞는 상품을 고름 (결과는 PC에 기억)"""
+    cache = read_json(CODE_MAP_FILE, {})
+    now = time.time()
+    out, changed = {}, False
+    for code in sorted(set(codes)):
+        e = cache.get(code)
+        if e and now - e.get("t", 0) < (CODE_HIT_DAYS if e.get("no") else CODE_MISS_DAYS) * 86400:
+            if e.get("no"):
+                out[code] = e["no"]
+            continue
+        found, how = None, ""
+        try:
+            for q in [code] + _zero_variants(code):          # 정확한 코드 먼저, 없으면 0 개수만 다른 코드
+                data = api_get(cfg, token, "/admin/products", {
+                    "product_name": q, "fields": "product_no,product_name,selling,display", "limit": 100})
+                found = _pick_product(data.get("products", []), q)
+                if found:
+                    how = "" if q == code else f" (코드 {q}로 찾음)"
+                    break
+                time.sleep(0.2)
+        except AuthError:
+            raise
+        except Exception as e:
+            log.warning(f"상품코드 {code} 찾기 실패(사진 없이 출력): {e}")
+            continue
+        changed = True
+        if found:
+            no = str(found["product_no"])
+            cache[code] = {"no": no, "name": str(found.get("product_name", ""))[:60], "t": now}
+            out[code] = no
+            log.info(f"[사진] 상품코드 {code} → 카페24 상품 {no}{how}")
+        else:
+            cache[code] = {"no": "", "t": now}
+            log.info(f"[사진] 상품코드 {code}: 카페24에서 맞는 상품을 못 찾음")
+    if changed:
+        write_json(CODE_MAP_FILE, cache)
+    return out
+
+
 def fetch_images(cfg, token, orders):
-    """상품번호별 사진 파일 경로. 사진이 없거나 끝내 실패하면 빠짐 → 주문서에서 빈칸."""
-    def valid(no):   # 마켓 상품 중 카페24 상품과 연결 안 된 것은 번호가 -99999 등으로 옴 → 사진 없음
+    """상품번호별 사진 파일 경로. 사진이 없거나 끝내 실패하면 빠짐 → 주문서에서 빈칸.
+    카페24 상품과 연결 안 된 주문(쿠팡 등)은 상품명 앞 코드로 카페24 상품을 찾아 그 사진을 씀 (item['_img_no'])"""
+    def valid(no):   # 마켓 상품 중 카페24 상품과 연결 안 된 것은 번호가 -99999 등으로 옴 → 코드로 찾음
         try:
             return int(no) > 0
         except (TypeError, ValueError):
             return False
-    nos = sorted({str(i.get("product_no")) for o in orders for i in o["items"] if valid(i.get("product_no"))})
+    loose = [i for o in orders for i in o["items"] if not valid(i.get("product_no"))]
+    codes = {product_code(i.get("product_name") or i.get("product_name_default")) for i in loose} - {None}
+    if codes:
+        try:
+            cmap = resolve_codes(cfg, token, codes)
+        except AuthError:
+            raise
+        except Exception as e:
+            log.warning(f"상품코드로 사진 찾기 실패(사진 없이 출력): {e}")
+            cmap = {}
+        for i in loose:
+            no = cmap.get(product_code(i.get("product_name") or i.get("product_name_default")))
+            if no:
+                i["_img_no"] = no
+    nos = sorted({str(i.get("product_no")) for o in orders for i in o["items"] if valid(i.get("product_no"))}
+                 | {i["_img_no"] for i in loose if i.get("_img_no")})
     failed = read_json(FAILED_IMG_FILE, {})
     now = time.time()
     result, need = {}, []
@@ -1240,11 +1356,14 @@ def load_history():
     return read_json(HISTORY_FILE, [])
 
 
-def add_history(kind, orders, pdf, pages):
+def add_history(kind, orders, pdf, pages, pmap=None):
     h = load_history()
-    h.insert(0, {"time": dt.datetime.now().isoformat(timespec="seconds"), "kind": kind,
-                 "count": len(orders), "pages": pages, "pdf": str(pdf),
-                 "orders": [order_brief(o) for o in orders]})
+    e = {"time": dt.datetime.now().isoformat(timespec="seconds"), "kind": kind,
+         "count": len(orders), "pages": pages, "pdf": str(pdf),
+         "orders": [order_brief(o) for o in orders]}
+    if pmap:
+        e["pmap"] = pmap            # PDF(인쇄) 순서의 [주문번호, 장 수] — 이어서 뽑기에 씀
+    h.insert(0, e)
     write_json(HISTORY_FILE, h)
 
 
@@ -1436,6 +1555,7 @@ def new_orders(cfg, token):
 
 
 LAST_END_PAGES = 0
+LAST_PMAP = []                 # 마지막으로 만든 주문서 PDF의 [주문번호, 장 수] (인쇄 순서)
 
 
 def make_pdf(cfg, token, orders, prefix, progress=None, end_sheet=False, split=False, reverse=False):
@@ -1454,8 +1574,9 @@ def make_pdf(cfg, token, orders, prefix, progress=None, end_sheet=False, split=F
         views = views[::-1]
     pdf = PDF_DIR / f"{prefix}_{dt.datetime.now():%Y%m%d_%H%M%S}.pdf"
     pages = sheet.build_orders_pdf(views, pdf, progress)
-    global LAST_END_PAGES
+    global LAST_END_PAGES, LAST_PMAP
     LAST_END_PAGES = 0
+    LAST_PMAP = list(getattr(sheet, "LAST_PAGE_MAP", []) or [])
     log.info(f"PDF 생성: {pdf.name} ({len(orders)}건, {pages}장)")
     return pdf, pages
 
@@ -1485,7 +1606,7 @@ def print_orders(cfg, token, orders, kind, progress=None, record=True, end_sheet
         state = read_json(STATE_FILE, {})
         state["last_print"] = {"pdf": str(pdf), "time": now.strftime("%m/%d %H:%M"), "count": len(orders)}
         write_json(STATE_FILE, state)
-    add_history(kind, orders, pdf, pages)
+    add_history(kind, orders, pdf, pages, LAST_PMAP)
     return pdf, pages
 
 
@@ -1772,6 +1893,7 @@ def run(cfg, mode):
                 w = watch_print_job(cfg, pdf, pages, stage)
                 auto_status(phase="완료" if w["state"] != "problem" else "확인 필요", final=True,
                             result=w["state"], printer_issues=w["issues"], printer_note=w["note"],
+                            interrupted=bool(w.get("interrupted")), stalled=False,
                             pages=pages - LAST_END_PAGES, end_pages=LAST_END_PAGES, pdf=str(pdf))
             except (AutoStopped, PrintStopped) as stop_e:
                 was_sent = bool(sent.get("printed")) or isinstance(stop_e, PrintStopped)
@@ -1874,6 +1996,7 @@ def spawn_notifier():
         log.warning(f"결과 창을 띄우지 못했습니다(인쇄에는 영향 없음): {e}")
 
 
+PRINTER_STALL_WAIT = 3600      # 프린터가 멈추면(용지 부족 등) 종이를 넣고 [OK] 누를 때까지 기다리는 최대 시간(초)
 _PRINTER_PROBLEMS = {"PaperOut": "용지 없음", "NoPaper": "용지 없음", "PaperJam": "용지 걸림", "PaperProblem": "용지 문제",
                      "Offline": "프린터 꺼짐·연결 끊김", "DoorOpen": "덮개 열림", "Error": "프린터 오류",
                      "UserIntervention": "프린터 확인 필요", "OutputBinFull": "출력함 가득 참", "NotAvailable": "프린터 사용 불가",
@@ -1894,9 +2017,10 @@ def watch_print_job(cfg, pdf, pages, stage=None):
            "@{n='St';e={\"$($_.JobStatus)\"}},PagesPrinted,TotalPages); "
            "[pscustomobject]@{S=\"$($p.PrinterStatus)\"; J=$j} | ConvertTo-Json -Depth 3 -Compress")
     stem = Path(pdf).stem
-    issues, gone_count, last_prog = [], 0, ""
+    issues, gone_count, last_prog, printed_n = [], 0, "", None
     t_start = time.time()
     deadline = time.time() + min(max(180, pages * 10), 1500)
+    stall_since = None                  # 프린터 문제(용지 부족 등)가 처음 보인 때 → 그때부터 최대 1시간 기다림
     while time.time() < deadline:
         check_stop()
         try:
@@ -1911,28 +2035,95 @@ def watch_print_job(cfg, pdf, pages, stage=None):
         # '프린터로 보냄(Complete)'·'인쇄됨(Printed)'·'삭제됨'은 컴퓨터가 프린터에 다 넘겨준 것 → 끝난 것으로
         sent = [j for j in mine if any(k in str(j.get("St") or "") for k in ("Complete", "Printed", "Deleted"))]
         mine = [j for j in mine if j not in sent]
-        for key, ko in _PRINTER_PROBLEMS.items():
-            if key in pst or any(key in str(j.get("St") or "") for j in mine):
-                if ko not in issues:
-                    issues.append(ko)
-                    log.warning(f"[프린터 감시] {ko} 감지 ({printer})")
+        now_bad = [ko for key, ko in _PRINTER_PROBLEMS.items()
+                   if key in pst or any(key in str(j.get("St") or "") for j in mine)]
+        for ko in now_bad:
+            if ko not in issues:
+                issues.append(ko)
+                log.warning(f"[프린터 감시] {ko} 감지 ({printer})")
+        if mine:
+            j = mine[0]
+            try:
+                printed_n = int(j.get("PagesPrinted") or 0) or printed_n
+            except (TypeError, ValueError):
+                pass
+            last_prog = f"{j.get('PagesPrinted') or 0}/{j.get('TotalPages') or '?'}장"
+        if now_bad:
+            # 종이를 넣고 프린터의 [OK]를 누르면 이어서 나오므로, 문제가 보이면 그때부터 1시간까지 기다림
+            if stall_since is None:
+                stall_since = time.time()
+                deadline = max(deadline, stall_since + PRINTER_STALL_WAIT)
+                log.warning(f"[프린터 감시] 인쇄가 멈춤({', '.join(now_bad)}) — 최대 {PRINTER_STALL_WAIT // 60}분 기다립니다")
+            left = max(0, int((deadline - time.time()) // 60))
+            if stage:
+                stage(f"프린터 멈춤: {', '.join(now_bad)} — 종이를 넣고 프린터의 [OK]를 누르세요 (남은 {left}분)",
+                      printer_progress=last_prog, printer_issues=issues, stalled=True)
+        elif mine and stage:
+            stage("프린터 확인 중", printer_progress=last_prog, printer_issues=issues, stalled=False)
         if mine:
             gone_count = 0
-            j = mine[0]
-            last_prog = f"{j.get('PagesPrinted') or 0}/{j.get('TotalPages') or '?'}장"
-            if stage:
-                stage("프린터 확인 중", printer_progress=last_prog, printer_issues=issues)
         else:
             gone_count += 1
-            if gone_count >= 2 and not any(k in pst for k in _PRINTER_PROBLEMS):
+            if gone_count >= 2 and not now_bad:
                 note = ("프린터로 모두 보냄" if sent else "인쇄 대기열을 모두 보냄") + \
                        (" (중간에 문제가 있었지만 이어서 인쇄됨)" if issues else "")
                 log.info(f"[프린터 감시] 끝: {note} ({time.time() - t_start:.0f}초)")
                 return {"state": "problem" if issues else "ok", "issues": issues, "note": note}
         time.sleep(5)
+    stalled = stall_since is not None
     log.warning(f"[프린터 감시] 시간 안에 끝나지 않음: 마지막 확인 {last_prog}, 프린터 상태 '{pst}'")
-    return {"state": "problem", "issues": issues or ["인쇄가 끝나지 않음"],
-            "note": f"시간 안에 인쇄가 끝나지 않았습니다 (마지막 확인 {last_prog})"}
+    if stalled:
+        mark_interrupted(pdf, ", ".join(issues) or "프린터 문제", printed_n)
+    return {"state": "problem", "issues": issues or ["인쇄가 끝나지 않음"], "interrupted": stalled,
+            "note": (f"프린터가 멈춘 채 {PRINTER_STALL_WAIT // 60}분이 지났습니다 (마지막 확인 {last_prog}). "
+                     "종이를 넣어도 더 안 나오면 출력 기록에서 [이어서 뽑기]를 쓰세요") if stalled
+            else f"시간 안에 인쇄가 끝나지 않았습니다 (마지막 확인 {last_prog})"}
+
+
+def mark_interrupted(pdf, reason, printed_pages=None):
+    """출력 기록에 '중간에 멈춤' 표시 (출력 기록 → [이어서 뽑기]에서 씀)"""
+    h = load_history()
+    for b in h:
+        if b.get("pdf") == str(pdf):
+            b["interrupted"] = {"reason": reason, "printed": printed_pages,
+                                "time": dt.datetime.now().isoformat(timespec="seconds")}
+            write_json(HISTORY_FILE, h)
+            log.warning(f"[이어서 뽑기] {Path(pdf).name} 중간에 멈춤으로 기록 ({reason}, 프린터가 알려준 인쇄 장 수 {printed_pages})")
+            return True
+    return False
+
+
+def resume_pdf(b, start_page):
+    """출력 기록 묶음의 PDF에서 start_page(1부터)부터 끝까지만 담은 PDF를 만듦"""
+    from pypdf import PdfReader, PdfWriter
+    src = PdfReader(b["pdf"])
+    w = PdfWriter()
+    for pg in src.pages[start_page - 1:]:
+        w.add_page(pg)
+    out = PDF_DIR / f"이어서뽑기_{dt.datetime.now():%Y%m%d_%H%M%S}.pdf"
+    with open(out, "wb") as f:
+        w.write(f)
+    return out, len(src.pages) - start_page + 1
+
+
+def print_resume(cfg, b, start_page, from_oid):
+    """이어서 뽑기: 컴퓨터 대기열에 남은 그 묶음을 지우고, start_page부터 끝까지 다시 인쇄"""
+    try:
+        cancel_print_jobs(cfg, b["pdf"])
+    except Exception as e:
+        log.warning(f"[이어서 뽑기] 대기열 정리 실패(계속 진행): {e}")
+    out, n = resume_pdf(b, start_page)
+    print_pdf(cfg, out)
+    h = load_history()
+    for x in h:
+        if x.get("pdf") == b["pdf"] and x.get("interrupted"):
+            x["interrupted"]["resumed"] = dt.datetime.now().isoformat(timespec="seconds")
+    h.insert(0, {"time": dt.datetime.now().isoformat(timespec="seconds"), "kind": "이어서 뽑기",
+                 "count": 0, "pages": n, "pdf": str(out), "orders": [], "from": from_oid,
+                 "source": b["time"]})
+    write_json(HISTORY_FILE, h)
+    log.info(f"[이어서 뽑기] {b['time'][5:16]} 묶음을 {start_page}쪽({from_oid})부터 {n}장 인쇄")
+    return n
 
 
 def print_notice(cfg, message):

@@ -266,7 +266,7 @@ def to_view(o, images):
             "ship_fee": it.get("individual_shipping_fee") or 0,
             "tracking": it.get("tracking_no") or "-",
             "status": it.get("status_text") or STATUS.get(it.get("order_status") or "", ""),
-            "image": images.get(str(it.get("product_no") or "")),
+            "image": images.get(str(it.get("_img_no") or it.get("product_no") or "")),   # _img_no: 상품코드로 찾은 사진
         })
 
     member_id = o.get("member_id") or buyer.get("member_id")
@@ -464,6 +464,9 @@ def _draw_badge(c, v):
     c.restoreState()
 
 
+LAST_PAGE_MAP = []
+
+
 class _OrderStart(Flowable):
     """주문서 한 건의 시작 표시 (보이지 않음). 쪽 번호 계산에 사용."""
     def __init__(self, idx):
@@ -566,7 +569,9 @@ def build_orders_pdf(views, out_path, progress=None, end_info=None, divider=None
     """주문서 여러 건 → A4 가로에 같은 주문서 2부씩 배치한 PDF. 주문마다 새 장에서 시작."""
     total = len(views)
     step = (lambda i: progress(i, total)) if progress else None
+    global LAST_PAGE_MAP
     _, totals = _single_copy_pdf(views, {}, None)            # 1회차: 주문별 쪽수 계산
+    LAST_PAGE_MAP = [[v["order_id"], totals.get(i, 1)] for i, v in enumerate(views)]   # 인쇄 순서 (이어서 뽑기용)
     data, _ = _single_copy_pdf(views, totals, step)           # 2회차: 쪽수 넣어서 완성
     src = PdfReader(io.BytesIO(data))
     marked = src                                               # 오른쪽(작업용) 주문서: 형광펜 + 찾기용 표시

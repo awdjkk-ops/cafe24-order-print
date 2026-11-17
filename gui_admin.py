@@ -135,6 +135,28 @@ class AdminTab(ttk.Frame):
              row=2, column=0, sticky="w", pady=(2, 0), wrap=430)
 
         # 6. 프로그램 업데이트
+        # --- 수제 제작 상품 코드 (택배 탭 '수제 제작 상품 확인'에 보여 줄 상품)
+        f = ttk.LabelFrame(right, text=" 수제 제작 상품 코드 ", padding=10); f.grid(row=2, column=0, sticky="we", pady=(10, 0))
+        hint(f, "상품명 맨 앞 코드(예: PDT2431)를 등록하면, 이 코드의 상품이 든 주문을 택배 탭 '수제 제작 상품 확인'에 보여 줍니다. "
+                "코드가 정확히 같은 상품만 잡습니다 (PDT07과 PDT007은 다른 코드).", row=0, column=0, columnspan=4, sticky="w",
+             pady=(0, 6), wrap=430)
+        ttk.Label(f, text="코드").grid(row=1, column=0, sticky="e", padx=(0, 4))
+        self.hm_code = ttk.Entry(f, width=12); self.hm_code.grid(row=1, column=1, sticky="w")
+        ttk.Label(f, text="메모").grid(row=1, column=2, sticky="e", padx=(8, 4))
+        self.hm_memo = ttk.Entry(f, width=18); self.hm_memo.grid(row=1, column=3, sticky="w")
+        self.hm_code.bind("<Return>", lambda e: self.hm_add())
+        self.hm_memo.bind("<Return>", lambda e: self.hm_add())
+        bf = ttk.Frame(f); bf.grid(row=2, column=0, columnspan=4, sticky="w", pady=(6, 0))
+        ttk.Button(bf, text="추가", style="Accent.TButton", command=self.hm_add).pack(side="left")
+        ttk.Button(bf, text="선택한 코드 삭제", command=self.hm_delete).pack(side="left", padx=6)
+        self.hm_tv = ttk.Treeview(f, columns=("code", "memo", "day"), show="headings", height=5, selectmode="extended")
+        for c, t_, w in (("code", "코드", 90), ("memo", "메모", 200), ("day", "등록한 날", 90)):
+            self.hm_tv.heading(c, text=t_); self.hm_tv.column(c, width=w)
+        self.hm_tv.grid(row=3, column=0, columnspan=4, sticky="we", pady=(6, 0))
+        self.hm_tv.bind("<Delete>", lambda e: self.hm_delete())
+        self.hm_cnt = ttk.Label(f, text="", style="Hint.TLabel"); self.hm_cnt.grid(row=4, column=0, columnspan=4, sticky="w", pady=(4, 0))
+        self.hm_show()
+
         f = ttk.LabelFrame(right, text=" 프로그램 업데이트 ", padding=10); f.grid(row=3, column=0, sticky="we", pady=(10, 0))
         import updater
         self.ver_lb = ttk.Label(f, text="", font=T.f(11, True)); self.ver_lb.grid(row=0, column=0, columnspan=2, sticky="w")
@@ -155,6 +177,51 @@ class AdminTab(ttk.Frame):
         self.refresh()
 
     # ------------------------------------------------------------
+    # ---------------------------------------------------------------- 수제 제작 상품 코드
+    def hm_show(self):
+        self.hm_tv.delete(*self.hm_tv.get_children())
+        items = sorted(op.load_handmade(), key=lambda e: e.get("code", ""))
+        for e in items:
+            self.hm_tv.insert("", "end", iid=e["code"], values=(e["code"], e.get("memo", ""), e.get("added", "")))
+        self.hm_cnt.configure(text=f"{len(items)}개 등록됨 · 이 PC의 data 폴더에 저장됩니다 (업데이트해도 그대로)")
+
+    def hm_add(self):
+        code = self.hm_code.get().strip().upper().rstrip("-").strip()
+        if not code:
+            return
+        if op.product_code(code + "-") != code:
+            messagebox.showwarning("수제 제작 코드", "코드는 영문으로 시작하고 숫자가 들어간 형태로 넣어 주세요. (예: PDT2431)")
+            return
+        items = op.load_handmade()
+        if any(e.get("code") == code for e in items):
+            messagebox.showinfo("수제 제작 코드", f"{code}는 이미 등록돼 있습니다.")
+            return
+        items.append({"code": code, "memo": self.hm_memo.get().strip(), "added": op.dt.date.today().isoformat()})
+        op.save_handmade(items)
+        op.log.info(f"[수제 제작] 코드 추가: {code}")
+        self.hm_code.delete(0, "end"); self.hm_memo.delete(0, "end")
+        self.hm_show()
+        self.hm_code.focus_set()
+        self.app.flash(f"수제 제작 코드 {code}를 추가했습니다. 택배 탭 확인 목록에 반영됩니다.")
+        self._hm_refresh_courier()
+
+    def hm_delete(self):
+        sel = list(self.hm_tv.selection())
+        if not sel:
+            messagebox.showinfo("수제 제작 코드", "목록에서 지울 코드를 골라 주세요.")
+            return
+        if not messagebox.askyesno("수제 제작 코드", f"코드 {len(sel)}개를 지울까요?\n\n" + ", ".join(sel)):
+            return
+        op.save_handmade([e for e in op.load_handmade() if e.get("code") not in sel])
+        op.log.info(f"[수제 제작] 코드 삭제: {', '.join(sel)}")
+        self.hm_show()
+        self._hm_refresh_courier()
+
+    def _hm_refresh_courier(self):
+        ct = getattr(self.app, "courier_tab", None)
+        if ct is not None:
+            ct._auto_key = None                     # 다음에 택배 탭을 열면 다시 확인
+
     def refresh(self):
         st, txt = op.token_status()
         self.auth_lb.configure(text=f"상태: {txt}", foreground={"ok": "#1B7F3B", "warn": "#B25B00", "bad": "#C62828"}[st])
