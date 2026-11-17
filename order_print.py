@@ -788,6 +788,119 @@ def save_handmade(items):
     write_json(HANDMADE_FILE, items)
 
 
+_HM_CODE_ONLY = re.compile(r"^([A-Za-z]+[A-Za-z0-9]*\d[A-Za-z0-9]*)\s*-?$")
+_HM_HEADERS = {"코드", "상품코드", "code", "메모"}
+
+
+def parse_handmade_text(text):
+    """붙여넣은 글(메모장·엑셀 복사) → ([(코드, 메모)], [형식이 안 맞는 줄]).
+    한 줄에 하나: '코드', '코드, 메모', '코드<탭>메모', 또는 '코드-상품명'(뒤 상품명이 메모가 됨)"""
+    rows, bad = {}, []
+    for raw in str(text or "").splitlines():
+        line = raw.strip().strip("\ufeff")
+        if not line:
+            continue
+        if "\t" in line:
+            first, _, memo = line.partition("\t")
+        elif "," in line:
+            first, _, memo = line.partition(",")
+        else:
+            first, memo = line, ""
+        first, memo = first.strip(), memo.replace("\t", " ").strip()
+        if first.lower() in _HM_HEADERS:
+            continue                                    # 제목 줄
+        m = _HM_CODE_ONLY.match(first)
+        if m:
+            code = m.group(1).upper()
+        else:
+            code = product_code(first)
+            if not code:
+                bad.append(raw.strip())
+                continue
+            if not memo:                                # '코드-상품명' → 상품명을 메모로
+                memo = first.split("-", 1)[1].strip()
+        rows[code] = memo                               # 같은 코드가 또 나오면 뒤의 것
+    return list(rows.items()), bad
+
+
+def read_handmade_file(path):
+    """엑셀(.xlsx)·CSV·메모장(.txt) → 붙여넣기와 같은 글 (A열 코드, B열 메모)"""
+    path = Path(path)
+    if path.suffix.lower() in (".xlsx", ".xlsm"):
+        from openpyxl import load_workbook
+        ws = load_workbook(path, read_only=True, data_only=True).worksheets[0]
+        lines = []
+        for r in ws.iter_rows(values_only=True):
+            a = "" if not r or r[0] is None else str(r[0]).strip()
+            b = "" if len(r) < 2 or r[1] is None else str(r[1]).strip()
+            if a:
+                lines.append(f"{a}\t{b}" if b else a)
+        return "\n".join(lines)
+    data = path.read_bytes()
+    for enc in ("utf-8-sig", "cp949"):
+        try:
+            text = data.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        raise ValueError("파일 글자를 읽지 못했습니다 (UTF-8 또는 한글 윈도우 형식으로 저장해 주세요)")
+    if path.suffix.lower() == ".csv":
+        import csv, io
+        lines = []
+        for r in csv.reader(io.StringIO(text)):
+            if r and r[0].strip():
+                lines.append(r[0].strip() + (f"\t{r[1].strip()}" if len(r) > 1 and r[1].strip() else ""))
+        return "\n".join(lines)
+    return text
+
+
+def plan_handmade(rows, replace=False):
+    """가져오기 계획: 새로 추가 / 이미 있음 / 메모가 다름(코드, 지금 메모, 새 메모) / (바꾸기면) 빠지는 코드"""
+    cur = {e["code"]: e for e in load_handmade()}
+    new = [c for c, _ in rows if c not in cur]
+    same = [c for c, m in rows if c in cur and (not m or m == cur[c].get("memo", ""))]
+    memo = [(c, cur[c].get("memo", ""), m) for c, m in rows if c in cur and m and m != cur[c].get("memo", "")]
+    gone = [c for c in cur if c not in dict(rows)] if replace else []
+    return {"new": new, "same": same, "memo": memo, "gone": gone}
+
+
+def apply_handmade(rows, replace=False, change_memo=False):
+    """가져오기 적용. 새 메모가 비어 있으면 원래 메모를 지우지 않음"""
+    cur = {e["code"]: e for e in load_handmade()}
+    today = dt.date.today().isoformat()
+    out = {} if replace else dict(cur)
+    for code, memo in rows:
+        if code in cur:
+            e = dict(cur[code])
+            if memo and change_memo:
+                e["memo"] = memo
+            out[code] = e
+        else:
+            out[code] = {"code": code, "memo": memo, "added": today}
+    save_handmade(sorted(out.values(), key=lambda e: e["code"]))
+    return len(out)
+
+
+def write_handmade_xlsx(path, items=None):
+    """수제 제작 코드 엑셀 (A열 코드, B열 메모). items가 없으면 예시가 든 빈 양식"""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "수제제작코드"
+    ws.append(["코드", "메모"])
+    for c in ws[1]:
+        c.font = Font(bold=True); c.fill = PatternFill("solid", fgColor="E7F5EE")
+    for code, memo in (items if items is not None else [("PDT2431", "예시) 수제 귀걸이 — 이 줄은 지우고 쓰세요"),
+                                                          ("HM105", "예시) 메모는 비워도 됩니다")]):
+        ws.append([code, memo])
+    ws.column_dimensions["A"].width = 16
+    ws.column_dimensions["B"].width = 44
+    wb.save(path)
+    return path
+
+
 def handmade_lines(orders):
     """수제 제작 코드의 상품이 든 주문: '주문번호 / 수령인 / 상품명 / 옵션 / 개수' 줄들"""
     codes = {str(e.get("code", "")).upper() for e in load_handmade()} - {""}

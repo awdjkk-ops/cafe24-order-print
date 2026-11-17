@@ -155,6 +155,14 @@ class AdminTab(ttk.Frame):
         self.hm_tv.grid(row=3, column=0, columnspan=4, sticky="we", pady=(6, 0))
         self.hm_tv.bind("<Delete>", lambda e: self.hm_delete())
         self.hm_cnt = ttk.Label(f, text="", style="Hint.TLabel"); self.hm_cnt.grid(row=4, column=0, columnspan=4, sticky="w", pady=(4, 0))
+        bf2 = ttk.Frame(f); bf2.grid(row=5, column=0, columnspan=4, sticky="w", pady=(8, 0))
+        ttk.Button(bf2, text="여러 개 붙여넣기", command=lambda: HandmadeImport(self)).pack(side="left")
+        ttk.Button(bf2, text="파일에서 가져오기", command=self.hm_from_file).pack(side="left", padx=6)
+        ttk.Button(bf2, text="양식 받기", command=self.hm_template).pack(side="left")
+        ttk.Button(bf2, text="엑셀로 내보내기", command=self.hm_export).pack(side="left", padx=6)
+        hint(f, "한꺼번에 넣기: 메모장·엑셀에서 복사해 [여러 개 붙여넣기]에 붙이거나, 엑셀(A열 코드·B열 메모)·CSV·메모장 파일을 "
+                "[파일에서 가져오기]로 고릅니다. 양식은 [양식 받기]로 받을 수 있습니다.", row=6, column=0, columnspan=4, sticky="w",
+             pady=(4, 0), wrap=430)
         self.hm_show()
 
         f = ttk.LabelFrame(right, text=" 프로그램 업데이트 ", padding=10); f.grid(row=3, column=0, sticky="we", pady=(10, 0))
@@ -216,6 +224,43 @@ class AdminTab(ttk.Frame):
         op.log.info(f"[수제 제작] 코드 삭제: {', '.join(sel)}")
         self.hm_show()
         self._hm_refresh_courier()
+
+    def hm_from_file(self):
+        from tkinter import filedialog
+        path = filedialog.askopenfilename(title="수제 제작 코드 파일 고르기",
+                                          filetypes=[("엑셀·CSV·메모장", "*.xlsx *.xlsm *.csv *.txt"), ("모든 파일", "*.*")])
+        if not path:
+            return
+        try:
+            text = op.read_handmade_file(path)
+        except Exception as e:
+            messagebox.showerror("파일에서 가져오기", f"파일을 읽지 못했습니다.\n\n{e}")
+            return
+        HandmadeImport(self, text, source=os.path.basename(path))
+
+    def _hm_save_xlsx(self, title, name, items=None):
+        from tkinter import filedialog
+        path = filedialog.asksaveasfilename(title=title, initialfile=name, defaultextension=".xlsx",
+                                            filetypes=[("엑셀 파일", "*.xlsx")])
+        if not path:
+            return
+        try:
+            op.write_handmade_xlsx(path, items)
+        except Exception as e:
+            messagebox.showerror(title, f"저장하지 못했습니다 (파일이 열려 있으면 닫고 다시 해 주세요).\n\n{e}")
+            return
+        self.app.flash(f"{os.path.basename(path)} 를 저장했습니다.")
+        op.open_file(os.path.dirname(path))
+
+    def hm_template(self):
+        self._hm_save_xlsx("양식 받기", "수제제작코드_양식.xlsx")
+
+    def hm_export(self):
+        items = [(e["code"], e.get("memo", "")) for e in sorted(op.load_handmade(), key=lambda e: e["code"])]
+        if not items:
+            messagebox.showinfo("엑셀로 내보내기", "등록된 코드가 없습니다.")
+            return
+        self._hm_save_xlsx("엑셀로 내보내기", f"수제제작코드_{op.dt.date.today():%Y%m%d}.xlsx", items)
 
     def _hm_refresh_courier(self):
         ct = getattr(self.app, "courier_tab", None)
@@ -437,3 +482,73 @@ class AdminTab(ttk.Frame):
         logs = sorted(op.LOG_DIR.glob("*.log"))
         if logs:
             op.open_file(logs[-1])
+
+
+class HandmadeImport(tk.Toplevel):
+    """수제 제작 코드 한꺼번에 넣기: 붙여넣기(또는 파일 내용) → 추가하기 / 목록 바꾸기"""
+
+    def __init__(self, tab, text="", source=None):
+        super().__init__(tab.app)
+        self.tab = tab
+        self.title("수제 제작 코드 한꺼번에 넣기")
+        self.configure(background=T.CARD)
+        self.transient(tab.app)
+        f = ttk.Frame(self, padding=18); f.pack(fill="both", expand=True)
+        f.columnconfigure(0, weight=1); f.rowconfigure(2, weight=1)
+        ttk.Label(f, text=f"파일: {source}" if source else "코드 붙여넣기", style="Title.TLabel").grid(row=0, column=0, sticky="w")
+        hint(f, "한 줄에 코드 하나. 메모는 코드 뒤에 쉼표(,)나 탭으로 붙입니다. 엑셀에서 코드·메모 두 칸을 복사해 붙여도 됩니다.\n"
+                "'PDT2431-수제 진주 귀걸이'처럼 상품명 전체를 붙이면 앞의 코드만 쓰고 뒤 상품명은 메모가 됩니다.",
+             row=1, column=0, sticky="w", pady=(4, 6), wrap=520)
+        self.box = T.text_box(tk.Text(f, width=64, height=14, wrap="none"))
+        self.box.grid(row=2, column=0, sticky="nsew")
+        self.box.insert("1.0", text or "")
+        self.mode = tk.StringVar(value="add")
+        mf = ttk.Frame(f); mf.grid(row=3, column=0, sticky="w", pady=(10, 0))
+        ttk.Radiobutton(mf, text="추가하기 (지금 목록은 두고 새 코드만 더함)", value="add", variable=self.mode).pack(anchor="w")
+        ttk.Radiobutton(mf, text="목록 바꾸기 (지금 목록을 지우고 이 내용으로)", value="replace", variable=self.mode).pack(anchor="w")
+        bf = ttk.Frame(f); bf.grid(row=4, column=0, sticky="we", pady=(12, 0))
+        ttk.Button(bf, text="가져오기", style="Accent.TButton", command=self.ok).pack(side="right")
+        ttk.Button(bf, text="취소", command=self.destroy).pack(side="right", padx=6)
+        self.update_idletasks()
+        app = tab.app
+        x = app.winfo_rootx() + (app.winfo_width() - self.winfo_width()) // 2
+        y = app.winfo_rooty() + 80
+        self.geometry(f"+{max(0, x)}+{max(0, y)}")
+        self.grab_set()
+        self.box.focus_set()
+
+    def ok(self):
+        rows, bad = op.parse_handmade_text(self.box.get("1.0", "end"))
+        if not rows:
+            messagebox.showwarning("가져오기", "넣을 코드를 찾지 못했습니다." + (f"\n\n형식이 안 맞는 줄:\n" + "\n".join(bad[:10]) if bad else ""),
+                                   parent=self)
+            return
+        replace = self.mode.get() == "replace"
+        plan = op.plan_handmade(rows, replace)
+        if bad and not messagebox.askyesno("가져오기", f"형식이 안 맞는 줄 {len(bad)}개는 빼고 넣습니다:\n\n" + "\n".join(bad[:10])
+                                         + ("\n…" if len(bad) > 10 else "") + "\n\n계속할까요?", parent=self):
+            return
+        if replace:
+            cur = len(op.load_handmade())
+            if not messagebox.askyesno("목록 바꾸기", f"지금 목록 {cur}개를 지우고 {len(rows)}개로 바꿀까요?"
+                                                  + (f"\n\n빠지는 코드 {len(plan['gone'])}개: " + ", ".join(plan["gone"][:15])
+                                                     + ("…" if len(plan["gone"]) > 15 else "") if plan["gone"] else ""), parent=self):
+                return
+        change = False
+        if plan["memo"]:
+            lines = "\n".join(f"{c}: \"{o or '(없음)'}\" → \"{n}\"" for c, o, n in plan["memo"][:12])
+            change = messagebox.askyesno("메모 바꾸기", f"이미 있는 코드 {len(plan['memo'])}개의 메모가 다릅니다.\n\n{lines}"
+                                                     + ("\n…" if len(plan["memo"]) > 12 else "")
+                                                     + "\n\n[예] 메모를 새것으로 바꾸기   [아니요] 그대로 두기", parent=self)
+        total = op.apply_handmade(rows, replace, change)
+        op.log.info(f"[수제 제작] 한꺼번에 넣기({'바꾸기' if replace else '추가'}): 새 {len(plan['new'])}, 메모 변경 "
+                    f"{len(plan['memo']) if change else 0}, 빠짐 {len(plan['gone'])}, 형식 오류 {len(bad)}")
+        self.destroy()
+        self.tab.hm_show()
+        self.tab._hm_refresh_courier()
+        msg = (f"추가 {len(plan['new'])}개 · 이미 있음 {len(plan['same']) + len(plan['memo'])}개"
+               + (f" (메모 바꿈 {len(plan['memo'])}개)" if change and plan["memo"] else "")
+               + (f" · 빠진 코드 {len(plan['gone'])}개" if replace else "")
+               + (f" · 형식이 안 맞아 뺀 줄 {len(bad)}개" if bad else "") + f"\n\n지금 등록된 코드: {total}개")
+        messagebox.showinfo("가져오기 완료", msg)
+
