@@ -10,14 +10,16 @@ from gui_schedule import hint
 import theme as T
 
 MSG = "중요 배송메세지 확인"
+CHECK_BOXES = ("묶음배송 확인", "제주도 확인", MSG, "수제 제작 상품 확인")      # 줄 끝 [확인 완료]
+EDIT_BOXES = ("묶음배송 확인", "제주도 확인", "수제 제작 상품 확인")              # 우클릭 삭제·수정 (화면·복사만)
 BOXES = ["묶음배송 확인", "제주도 확인", "중요 배송메세지 확인", "수제 제작 상품 확인", "추가배송 포함", "블랙리스트·경계대상", "주소 '~' 변경 확인"]
 BOX_HINTS = {
-    "묶음배송 확인": "이름·주소가 같은 주문 (택배 파일에 노란색). 롯데택배에 올리면 자동으로 묶입니다.",
+    "묶음배송 확인": "이름·주소가 같은 주문 (택배 파일에 노란색). 우클릭: 지우기·고치기 (화면·복사만)",
     "중요 배송메세지 확인": "흔한 메세지를 뺀 배송메세지. 우클릭: 지우기·고치기, 두 번 누르면 바로 고치기 (택배 파일에만 반영)",
     "블랙리스트·경계대상": "택배 파일에 빨강(블랙리스트)·파랑(경계대상)으로 표시됩니다.",
     "추가배송 포함": "구글 시트에 등록된 추가배송(재발송 등)입니다. 택배 파일을 만들면 시트에서 지워집니다.",
-    "제주도 확인": "제주·서귀포 주소입니다.",
-    "수제 제작 상품 확인": "관리 탭에 등록한 수제 제작 코드의 상품 (주문번호 / 수령인 / 상품명 / 옵션 / 개수)",
+    "제주도 확인": "제주·서귀포 주소입니다. 우클릭: 지우기·고치기 (화면·복사만)",
+    "수제 제작 상품 확인": "관리 탭에 등록한 수제 제작 상품 (주문번호 / 수령인 / 상품명 / 옵션 / 개수). 우클릭: 지우기·고치기 (화면·복사만)",
     "주소 '~' 변경 확인": "롯데택배가 '~'를 못 읽어서 '-'로 바꾼 주소입니다.",
 }
 
@@ -129,8 +131,17 @@ class CourierTab(ttk.Frame):
             t.configure(yscrollcommand=sb.set, state="disabled")
             self.texts[name] = t
             t.tag_configure("done", background=T.GREEN_L)      # [확인 완료]를 누른 줄
+            if name in EDIT_BOXES:
+                t.tag_configure("deleted", foreground=T.DIM, overstrike=True)
+                t.tag_configure("edited", background=T.HILITE)
+                t.tag_configure("mark", foreground=T.GREEN_D)
+                t.tag_configure("cur", background="#F1F1EE")
+                t.configure(spacing1=3, spacing3=3)
+                t.bind("<Button-3>", lambda e, n=name: self._line_menu(n, e))
+                t.bind("<Double-Button-1>", lambda e, n=name: (self._line_edit(n, self._line_at(n, e)), "break")[1])
         # 중요 배송메세지: 우클릭(삭제·수정·되돌리기), 두 번 누르면 수정
         self.msg_rows, self.msg_editable, self._editor = [], False, None
+        self.box_lines = {}
         mt = self.texts[MSG]
         mt.tag_configure("deleted", foreground=T.DIM)
         mt.tag_configure("edited", background=T.HILITE)
@@ -196,9 +207,12 @@ class CourierTab(ttk.Frame):
         for name, t in self.texts.items():
             t.configure(state="normal"); t.delete("1.0", "end")
             v = texts.get(name, "")
-            t.insert("1.0", v if v else "(없음)")
-            if v:
-                self._add_checks(name)
+            if name in EDIT_BOXES:
+                self._render_edit_box(name, v)
+            else:
+                t.insert("1.0", v if v else "(없음)")
+                if v and name in CHECK_BOXES:
+                    self._add_checks(name)
             t.configure(state="disabled")
 
     # ---------------------------------------------------------------- 줄마다 [확인 완료] (그날만 기억)
@@ -213,11 +227,12 @@ class CourierTab(ttk.Frame):
         return d.get("done", {}) if d.get("date") == dt.date.today().isoformat() else {}
 
     def _save_check(self, name, key, on):
-        done = self._load_checks()
+        d = self._day()
+        done = d.setdefault("done", {})
         keys = set(done.get(name, []))
         (keys.add if on else keys.discard)(key)
         done[name] = sorted(keys)
-        op.write_json(self.CHECK_FILE, {"date": dt.date.today().isoformat(), "done": done})
+        op.write_json(self.CHECK_FILE, d)
 
     def _add_checks(self, name):
         """줄 끝마다 [확인 완료] — 누르면 줄 전체가 초록색, 다시 누르면 취소. 다음 날이면 모두 지워짐"""
@@ -230,7 +245,13 @@ class CourierTab(ttk.Frame):
             line = t.get(f"{i}.0", f"{i}.end")
             if not line.strip() or line.strip() == "(없음)":
                 continue
-            key = self._check_key(name, line)
+            if name in EDIT_BOXES:
+                orig = self.box_lines[name][i - 1] if i - 1 < len(self.box_lines.get(name, [])) else line
+                if self._line_edits(name).get(orig) == "":
+                    continue                                   # 지운 줄은 확인 버튼 없음
+                key = orig
+            else:
+                key = self._check_key(name, line)
             lb = tk.Label(t, text="확인 완료", font=T.f(8, True), padx=7, pady=0, cursor="hand2")
 
             def paint(on, i=i, lb=lb):
@@ -335,15 +356,23 @@ class CourierTab(ttk.Frame):
         if not pos:
             return
         start = f"{pos}+3c"
+        row = self.msg_rows[i]
+        _, orig, cur, st = op.msg_state(row)
+        before = str(orig if st == "deleted" else cur).replace("\n", " ")
+
+        def save(val, i=i, before=before):
+            if i < len(self.msg_rows) and val.strip() != before.strip():   # 안 바꿨으면 그대로
+                self._msg_set(i, val)
+        self._open_editor(t, start, before, save)
+
+    def _open_editor(self, t, start, value, on_save):
+        """start 위치부터 줄 끝까지를 입력칸으로 덮고 글자를 블록으로 잡음. Enter·다른 곳 누르기=저장, Esc=취소"""
         t.see(start); t.update_idletasks()
         box, line_box = t.bbox(start), t.dlineinfo(start)
         if not box or not line_box:
             return
         x = box[0]
         y, h = line_box[1], line_box[3]                  # 줄 전체 높이에 맞춤
-        row = self.msg_rows[i]
-        _, orig, cur, st = op.msg_state(row)
-        value = str(orig if st == "deleted" else cur).replace("\n", " ")
         ent = tk.Entry(t, font=T.f(9), relief="flat", bd=0, bg=T.CARD, fg=T.INK, highlightthickness=1,
                        highlightbackground=T.GREEN, highlightcolor=T.GREEN, selectbackground=T.HILITE,
                        selectforeground=T.INK, insertwidth=1)
@@ -351,7 +380,7 @@ class CourierTab(ttk.Frame):
         ent.place(x=x - 2, y=y, width=max(120, t.winfo_width() - x - 6), height=h, bordermode="outside")
         ent.focus_set()
         ent.select_range(0, "end"); ent.icursor("end")
-        self._editor = (ent, i)
+        self._editor = (ent, on_save)
         ent.bind("<Return>", lambda e: (self._end_edit(True), "break")[1])
         ent.bind("<KP_Enter>", lambda e: (self._end_edit(True), "break")[1])
         ent.bind("<Escape>", lambda e: (self._end_edit(False), "break")[1])
@@ -360,22 +389,107 @@ class CourierTab(ttk.Frame):
     def _end_edit(self, save):
         if not self._editor:
             return
-        ent, i = self._editor
+        ent, on_save = self._editor
         self._editor = None
         try:
             val = ent.get()
             ent.destroy()
         except tk.TclError:
             return
-        if save and i < len(self.msg_rows):
-            row = self.msg_rows[i]
-            _, orig, cur, st = op.msg_state(row)
-            before = str(orig if st == "deleted" else cur).replace("\n", " ")
-            if val.strip() != before.strip():          # 안 바꿨으면 그대로 (지운 줄은 [원래 메세지로 되돌리기]로)
-                self._msg_set(i, val)
+        if save:
+            on_save(val)
+
+    # ---------------------------------------------------------------- 묶음배송·제주도·수제 제작: 줄 지우기·고치기 (화면·복사만)
+    def _day(self):
+        d = op.read_json(self.CHECK_FILE, {})
+        return d if d.get("date") == dt.date.today().isoformat() else {"date": dt.date.today().isoformat()}
+
+    def _line_edits(self, name):
+        return self._day().get("edits", {}).get(name, {})
+
+    def _set_line_edit(self, name, orig, new):
+        """new="" 지우기, 글=고치기, None=되돌리기. 그날만 기억"""
+        d = self._day()
+        e = d.setdefault("edits", {}).setdefault(name, {})
+        if new is None or new.strip() == orig.strip():
+            e.pop(orig, None)
+        else:
+            e[orig] = new.strip()
+        op.write_json(self.CHECK_FILE, d)
+
+    def _render_edit_box(self, name, text):
+        t = self.texts[name]
+        lines = [l for l in str(text or "").split("\n") if l.strip()]
+        self.box_lines[name] = lines
+        edits = self._line_edits(name)
+        t.delete("1.0", "end")
+        for i, orig in enumerate(lines):
+            if i:
+                t.insert("end", "\n")
+            e = edits.get(orig)
+            if e is None:
+                t.insert("end", orig)
+            elif e == "":
+                t.insert("end", f"(지움) {orig}", ("deleted",))
+            else:
+                t.insert("end", e, ("edited",)); t.insert("end", " ✎", ("mark",))
+        if not lines:
+            t.insert("1.0", "(없음)")
+        else:
+            self._add_checks(name)
+
+    def _line_at(self, name, e):
+        t = self.texts[name]
+        i = int(t.index(f"@{e.x},{e.y}").split(".")[0]) - 1
+        return i if 0 <= i < len(self.box_lines.get(name, [])) else None
+
+    def _line_menu(self, name, e):
+        i = self._line_at(name, e)
+        if i is None:
+            return
+        t = self.texts[name]
+        orig = self.box_lines[name][i]
+        t.tag_remove("cur", "1.0", "end"); t.tag_add("cur", f"{i + 1}.0", f"{i + 1}.end")
+        m = tk.Menu(self, tearoff=0, font=T.f(10))
+        m.add_command(label="삭제", command=lambda: self._line_set(name, i, ""))
+        m.add_command(label="수정", command=lambda: self._line_edit(name, i))
+        if orig in self._line_edits(name):
+            m.add_separator()
+            m.add_command(label="원래대로 되돌리기", command=lambda: self._line_set(name, i, None))
+        try:
+            m.tk_popup(e.x_root, e.y_root)
+        finally:
+            m.grab_release()
+            self.after(300, lambda: t.tag_remove("cur", "1.0", "end"))
+
+    def _line_set(self, name, i, new):
+        orig = self.box_lines[name][i]
+        self._set_line_edit(name, orig, new)
+        t = self.texts[name]
+        t.configure(state="normal")
+        self._render_edit_box(name, "\n".join(self.box_lines[name]))
+        t.configure(state="disabled")
+        self.app.flash("줄을 되돌렸습니다." if new is None else "줄을 지웠습니다 (화면·복사에서만)." if not new.strip()
+                       else "줄을 고쳤습니다 (화면·복사에서만).")
+
+    def _line_edit(self, name, i):
+        if i is None:
+            return
+        self._end_edit(True)
+        orig = self.box_lines[name][i]
+        cur = self._line_edits(name).get(orig) or orig
+
+        def save(val):
+            if val.strip() != cur.strip():
+                self._line_set(name, i, val if val.strip() else "")
+        self._open_editor(self.texts[name], f"{i + 1}.0", cur, save)
 
     def copy(self, name):
-        v = self.texts[name].get("1.0", "end").strip()
+        if name in EDIT_BOXES and self.box_lines.get(name):
+            ed = self._line_edits(name)
+            v = "\n".join(ed.get(l) or l for l in self.box_lines[name] if ed.get(l, None) != "")
+        else:
+            v = self.texts[name].get("1.0", "end").strip()
         if v and v != "(없음)":
             self.clipboard_clear(); self.clipboard_append(v)
             self.app.flash(f"'{name}' 내용을 복사했습니다.")

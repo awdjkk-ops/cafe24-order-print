@@ -137,11 +137,12 @@ class AdminTab(ttk.Frame):
         # 6. 프로그램 업데이트
         # --- 수제 제작 상품 코드 (택배 탭 '수제 제작 상품 확인'에 보여 줄 상품)
         f = ttk.LabelFrame(right, text=" 수제 제작 상품 코드 ", padding=10); f.grid(row=2, column=0, sticky="we", pady=(10, 0))
-        hint(f, "상품명 맨 앞 코드(예: PDT2431)를 등록하면, 이 코드의 상품이 든 주문을 택배 탭 '수제 제작 상품 확인'에 보여 줍니다. "
-                "코드가 정확히 같은 상품만 잡습니다 (PDT07과 PDT007은 다른 코드).", row=0, column=0, columnspan=4, sticky="w",
+        hint(f, "상품명 맨 앞 코드(예: PDT2431) 또는 코드가 없는 상품은 상품명 전체를 등록하면, 그 상품이 든 주문을 택배 탭 "
+                "'수제 제작 상품 확인'에 보여 줍니다. 코드는 정확히 같은 코드만(PDT07과 PDT007은 다름), 상품명은 완전히 같은 "
+                "상품명만 잡습니다 (앞뒤 공백·겹친 띄어쓰기는 무시).", row=0, column=0, columnspan=4, sticky="w",
              pady=(0, 6), wrap=430)
-        ttk.Label(f, text="코드").grid(row=1, column=0, sticky="e", padx=(0, 4))
-        self.hm_code = ttk.Entry(f, width=12); self.hm_code.grid(row=1, column=1, sticky="w")
+        ttk.Label(f, text="코드·상품명").grid(row=1, column=0, sticky="e", padx=(0, 4))
+        self.hm_code = ttk.Entry(f, width=16); self.hm_code.grid(row=1, column=1, sticky="w")
         ttk.Label(f, text="메모").grid(row=1, column=2, sticky="e", padx=(8, 4))
         self.hm_memo = ttk.Entry(f, width=18); self.hm_memo.grid(row=1, column=3, sticky="w")
         self.hm_code.bind("<Return>", lambda e: self.hm_add())
@@ -150,7 +151,7 @@ class AdminTab(ttk.Frame):
         ttk.Button(bf, text="추가", style="Accent.TButton", command=self.hm_add).pack(side="left")
         ttk.Button(bf, text="선택한 코드 삭제", command=self.hm_delete).pack(side="left", padx=6)
         self.hm_tv = ttk.Treeview(f, columns=("code", "memo", "day"), show="headings", height=5, selectmode="extended")
-        for c, t_, w in (("code", "코드", 90), ("memo", "메모", 200), ("day", "등록한 날", 90)):
+        for c, t_, w in (("code", "코드 / 상품명", 190), ("memo", "메모", 130), ("day", "등록한 날", 80)):
             self.hm_tv.heading(c, text=t_); self.hm_tv.column(c, width=w)
         self.hm_tv.grid(row=3, column=0, columnspan=4, sticky="we", pady=(6, 0))
         self.hm_tv.bind("<Delete>", lambda e: self.hm_delete())
@@ -160,7 +161,7 @@ class AdminTab(ttk.Frame):
         ttk.Button(bf2, text="파일에서 가져오기", command=self.hm_from_file).pack(side="left", padx=6)
         ttk.Button(bf2, text="양식 받기", command=self.hm_template).pack(side="left")
         ttk.Button(bf2, text="엑셀로 내보내기", command=self.hm_export).pack(side="left", padx=6)
-        hint(f, "한꺼번에 넣기: 메모장·엑셀에서 복사해 [여러 개 붙여넣기]에 붙이거나, 엑셀(A열 코드·B열 메모)·CSV·메모장 파일을 "
+        hint(f, "한꺼번에 넣기: 메모장·엑셀에서 복사해 [여러 개 붙여넣기]에 붙이거나, 엑셀(A열 코드 또는 상품명·B열 메모)·CSV·메모장 파일을 "
                 "[파일에서 가져오기]로 고릅니다. 양식은 [양식 받기]로 받을 수 있습니다.", row=6, column=0, columnspan=4, sticky="w",
              pady=(4, 0), wrap=430)
         self.hm_show()
@@ -191,26 +192,25 @@ class AdminTab(ttk.Frame):
         items = sorted(op.load_handmade(), key=lambda e: e.get("code", ""))
         for e in items:
             self.hm_tv.insert("", "end", iid=e["code"], values=(e["code"], e.get("memo", ""), e.get("added", "")))
-        self.hm_cnt.configure(text=f"{len(items)}개 등록됨 · 이 PC의 data 폴더에 저장됩니다 (업데이트해도 그대로)")
+        n_code = sum(1 for e in items if op.is_code(e.get("code")))
+        self.hm_cnt.configure(text=f"{len(items)}개 등록됨 (코드 {n_code} · 상품명 {len(items) - n_code}) · 이 PC의 data 폴더에 저장됩니다")
 
     def hm_add(self):
-        code = self.hm_code.get().strip().upper().rstrip("-").strip()
+        code = op.hm_key(self.hm_code.get().strip().rstrip("-") if op.is_code(self.hm_code.get().strip()) else self.hm_code.get())
         if not code:
             return
-        if op.product_code(code + "-") != code:
-            messagebox.showwarning("수제 제작 코드", "코드는 영문으로 시작하고 숫자가 들어간 형태로 넣어 주세요. (예: PDT2431)")
-            return
         items = op.load_handmade()
-        if any(e.get("code") == code for e in items):
-            messagebox.showinfo("수제 제작 코드", f"{code}는 이미 등록돼 있습니다.")
+        if any(op.hm_key(e.get("code")) == code for e in items):
+            messagebox.showinfo("수제 제작", f"'{code}'는 이미 등록돼 있습니다.")
             return
         items.append({"code": code, "memo": self.hm_memo.get().strip(), "added": op.dt.date.today().isoformat()})
         op.save_handmade(items)
-        op.log.info(f"[수제 제작] 코드 추가: {code}")
+        kind = "코드" if op.is_code(code) else "상품명"
+        op.log.info(f"[수제 제작] {kind} 추가: {code}")
         self.hm_code.delete(0, "end"); self.hm_memo.delete(0, "end")
         self.hm_show()
         self.hm_code.focus_set()
-        self.app.flash(f"수제 제작 코드 {code}를 추가했습니다. 택배 탭 확인 목록에 반영됩니다.")
+        self.app.flash(f"수제 제작 {kind} '{code[:30]}'를 추가했습니다. 택배 탭 확인 목록에 반영됩니다.")
         self._hm_refresh_courier()
 
     def hm_delete(self):
@@ -496,8 +496,9 @@ class HandmadeImport(tk.Toplevel):
         f = ttk.Frame(self, padding=18); f.pack(fill="both", expand=True)
         f.columnconfigure(0, weight=1); f.rowconfigure(2, weight=1)
         ttk.Label(f, text=f"파일: {source}" if source else "코드 붙여넣기", style="Title.TLabel").grid(row=0, column=0, sticky="w")
-        hint(f, "한 줄에 코드 하나. 메모는 코드 뒤에 쉼표(,)나 탭으로 붙입니다. 엑셀에서 코드·메모 두 칸을 복사해 붙여도 됩니다.\n"
-                "'PDT2431-수제 진주 귀걸이'처럼 상품명 전체를 붙이면 앞의 코드만 쓰고 뒤 상품명은 메모가 됩니다.",
+        hint(f, "한 줄에 하나. 코드(PDT2431)는 뒤에 쉼표(,)나 탭으로 메모를 붙일 수 있고, 엑셀에서 두 칸을 복사해 붙여도 됩니다.\n"
+                "'PDT2431-수제 진주 귀걸이'처럼 코드로 시작하는 상품명은 코드만 씁니다. 코드가 없는 상품은 상품명을 그대로 붙이세요 "
+                "(완전히 같은 상품명만 잡음, 메모는 탭 뒤에).",
              row=1, column=0, sticky="w", pady=(4, 6), wrap=520)
         self.box = T.text_box(tk.Text(f, width=64, height=14, wrap="none"))
         self.box.grid(row=2, column=0, sticky="nsew")

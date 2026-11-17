@@ -789,12 +789,13 @@ def save_handmade(items):
 
 
 _HM_CODE_ONLY = re.compile(r"^([A-Za-z]+[A-Za-z0-9]*\d[A-Za-z0-9]*)\s*-?$")
-_HM_HEADERS = {"코드", "상품코드", "code", "메모"}
+_HM_HEADERS = {"코드", "상품코드", "code", "메모", "상품명"}
 
 
 def parse_handmade_text(text):
-    """붙여넣은 글(메모장·엑셀 복사) → ([(코드, 메모)], [형식이 안 맞는 줄]).
-    한 줄에 하나: '코드', '코드, 메모', '코드<탭>메모', 또는 '코드-상품명'(뒤 상품명이 메모가 됨)"""
+    """붙여넣은 글(메모장·엑셀 복사) → ([(코드 또는 상품명, 메모)], [빈 칸 등 쓸 수 없는 줄]).
+    한 줄에 하나: '코드', '코드, 메모', '코드<탭>메모', '코드-상품명'(뒤 상품명이 메모),
+    또는 상품명 그대로(완전히 같은 상품명을 찾음, 메모는 탭 뒤에)"""
     rows, bad = {}, []
     for raw in str(text or "").splitlines():
         line = raw.strip().strip("\ufeff")
@@ -802,24 +803,26 @@ def parse_handmade_text(text):
             continue
         if "\t" in line:
             first, _, memo = line.partition("\t")
-        elif "," in line:
-            first, _, memo = line.partition(",")
         else:
             first, memo = line, ""
+            head, sep, tail = line.partition(",")
+            if sep and _HM_CODE_ONLY.match(head.strip()):      # '코드, 메모' (상품명 속 쉼표는 그대로 둠)
+                first, memo = head, tail
         first, memo = first.strip(), memo.replace("\t", " ").strip()
-        if first.lower() in _HM_HEADERS:
+        if first.lower() in _HM_HEADERS or first in ("코드 또는 상품명", "코드/상품명"):
             continue                                    # 제목 줄
-        m = _HM_CODE_ONLY.match(first)
-        if m:
-            code = m.group(1).upper()
-        else:
-            code = product_code(first)
-            if not code:
-                bad.append(raw.strip())
-                continue
-            if not memo:                                # '코드-상품명' → 상품명을 메모로
+        if _HM_CODE_ONLY.match(first):
+            key = first.rstrip("-").strip().upper()
+        elif product_code(first):                       # '코드-상품명' → 코드, 상품명은 메모로
+            key = product_code(first)
+            if not memo:
                 memo = first.split("-", 1)[1].strip()
-        rows[code] = memo                               # 같은 코드가 또 나오면 뒤의 것
+        else:
+            key = norm_name(first)                      # 상품명 그대로
+        if not key:
+            bad.append(raw.strip())
+            continue
+        rows[key] = memo                                # 같은 것이 또 나오면 뒤의 것
     return list(rows.items()), bad
 
 
@@ -889,22 +892,51 @@ def write_handmade_xlsx(path, items=None):
     wb = Workbook()
     ws = wb.active
     ws.title = "수제제작코드"
-    ws.append(["코드", "메모"])
+    ws.append(["코드 또는 상품명", "메모"])
     for c in ws[1]:
         c.font = Font(bold=True); c.fill = PatternFill("solid", fgColor="E7F5EE")
     for code, memo in (items if items is not None else [("PDT2431", "예시) 수제 귀걸이 — 이 줄은 지우고 쓰세요"),
-                                                          ("HM105", "예시) 메모는 비워도 됩니다")]):
+                                                          ("HM105", "예시) 메모는 비워도 됩니다"),
+                                                          ("완제품 천연가죽줄 통가죽줄 목걸이 게고리 마감 두께 3mm 블랙(1개)",
+                                                           "예시) 코드가 없으면 상품명을 그대로 (완전히 같은 상품명만 잡음)")]):
         ws.append([code, memo])
-    ws.column_dimensions["A"].width = 16
+    ws.column_dimensions["A"].width = 40
     ws.column_dimensions["B"].width = 44
     wb.save(path)
     return path
 
 
+def norm_name(text):
+    """상품명 비교용: 앞뒤 공백을 없애고 여러 칸 띄어쓰기를 한 칸으로"""
+    return " ".join(str(text or "").split())
+
+
+def is_code(text):
+    return bool(_HM_CODE_ONLY.match(str(text or "").strip()))
+
+
+def hm_key(text):
+    """등록할 글 → 저장 값: 코드 모양(영문+숫자 한 덩어리)이면 대문자 코드, 아니면 상품명(띄어쓰기 정리)"""
+    t = str(text or "").strip()
+    m = _HM_CODE_ONLY.match(t)
+    return m.group(1).upper() if m else norm_name(t)
+
+
+def handmade_keys():
+    """등록된 수제 제작 항목 → (코드 집합, 상품명 집합)"""
+    codes, names = set(), set()
+    for e in load_handmade():
+        k = str(e.get("code", "")).strip()
+        if not k:
+            continue
+        (codes.add(k.upper()) if is_code(k) else names.add(norm_name(k)))
+    return codes, names
+
+
 def handmade_lines(orders):
     """수제 제작 코드의 상품이 든 주문: '주문번호 / 수령인 / 상품명 / 옵션 / 개수' 줄들"""
-    codes = {str(e.get("code", "")).upper() for e in load_handmade()} - {""}
-    if not codes:
+    codes, names = handmade_keys()
+    if not codes and not names:
         return ""
     import order_sheet
     lines = []
@@ -912,7 +944,7 @@ def handmade_lines(orders):
         rcv = (o.get("receivers") or [{}])[0] or {}
         for it in o.get("items") or []:
             name = it.get("product_name") or it.get("product_name_default") or ""
-            if product_code(name) in codes:
+            if product_code(name) in codes or norm_name(name) in names:
                 qty = int(float(it.get("quantity") or 0))
                 lines.append(f"{o.get('order_id', '')} / {rcv.get('name', '')} / {name} / "
                              f"{order_sheet._option_text(it) or '-'} / {qty}개")
