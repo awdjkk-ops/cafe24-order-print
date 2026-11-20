@@ -12,11 +12,13 @@ import theme as T
 MSG = "중요 배송메세지 확인"
 CHECK_BOXES = ("묶음배송 확인", "제주도 확인", MSG, "수제 제작 상품 확인")      # 줄 끝 [확인 완료]
 EDIT_BOXES = ("묶음배송 확인", "제주도 확인", "수제 제작 상품 확인")              # 우클릭 삭제·수정 (화면·복사만)
-BOXES = ["묶음배송 확인", "제주도 확인", "중요 배송메세지 확인", "수제 제작 상품 확인", "추가배송 포함", "블랙리스트·경계대상", "주소 '~' 변경 확인"]
+BOXES = ["묶음배송 확인", "제주도 확인", "중요 배송메세지 확인", "수제 제작 상품 확인", op.PREV_BUNDLE, "추가배송 포함", "블랙리스트·경계대상", "주소 '~' 변경 확인"]
 BOX_HINTS = {
     "묶음배송 확인": "이름·주소가 같은 주문 (택배 파일에 노란색). 우클릭: 지우기·고치기 (화면·복사만)",
     "중요 배송메세지 확인": "흔한 메세지를 뺀 배송메세지. 우클릭: 지우기·고치기, 두 번 누르면 바로 고치기 (택배 파일에만 반영)",
     "블랙리스트·경계대상": "택배 파일에 빨강(블랙리스트)·파랑(경계대상)으로 표시됩니다.",
+    op.PREV_BUNDLE: "최근 7일 택배 파일에 넣었지만 카페24에서 아직 발송 처리 안 된 주문(보관 중)과 수령인 이름·주소가 같은 오늘 주문입니다. "
+                    "알려 주기만 하고 택배 파일에는 영향이 없습니다. 카페24 발송 처리를 한 뒤에 보세요. [복사]는 묶음배송 확인과 같은 모양입니다.",
     "추가배송 포함": "구글 시트에 등록된 추가배송(재발송 등)입니다. 택배 파일을 만들면 시트에서 지워집니다.",
     "제주도 확인": "제주·서귀포 주소입니다. 우클릭: 지우기·고치기 (화면·복사만)",
     "수제 제작 상품 확인": "관리 탭에 등록한 수제 제작 상품 (주문번호 / 수령인 / 상품명 / 옵션 / 개수). 우클릭: 지우기·고치기 (화면·복사만)",
@@ -118,17 +120,24 @@ class CourierTab(ttk.Frame):
         self.hist.bind("<<ComboboxSelected>>", lambda e: self.show_hist())
         self.texts = {}
         for i, name in enumerate(BOXES):
-            box = ttk.LabelFrame(right, text=f" {name} ", padding=6)
-            box.grid(row=i + 1, column=0, sticky="nsew", pady=(6, 0))
-            right.rowconfigure(i + 1, weight=2 if name in ("중요 배송메세지 확인", "묶음배송 확인", "수제 제작 상품 확인") else 1)
-            box.columnconfigure(0, weight=1); box.rowconfigure(1, weight=1)
-            head = ttk.Frame(box); head.grid(row=0, column=0, columnspan=2, sticky="we")
-            ttk.Label(head, text=BOX_HINTS[name], style="Hint.TLabel").pack(side="left")
+            # 제목 줄: 제목 · ⓘ(마우스를 올리면 설명) ······ [복사]
+            head = ttk.Frame(right, style="Page.TFrame")
+            head.grid(row=2 * i + 1, column=0, sticky="we", pady=(10 if i else 4, 2))
+            ttk.Label(head, text=name, style="Page.TLabel", font=T.f(11, True)).pack(side="left")
+            info = tk.Canvas(head, width=17, height=17, bg=T.BG, highlightthickness=0, cursor="question_arrow")
+            info.create_oval(1, 1, 16, 16, outline=T.MUTED, width=1.2)
+            info.create_text(9, 9, text="?", fill=T.MUTED, font=T.f(8, True))
+            info.pack(side="left", padx=(6, 0))
+            Tip(info, BOX_HINTS[name])
             ttk.Button(head, text="복사", width=6, command=lambda n=name: self.copy(n)).pack(side="right")
-            t = T.text_box(tk.Text(box, height=5 if name == "중요 배송메세지 확인" else 3, wrap="none"))
-            t.grid(row=1, column=0, sticky="nsew")
-            sb = ttk.Scrollbar(box, orient="vertical", command=t.yview); sb.grid(row=1, column=1, sticky="ns")
-            t.configure(yscrollcommand=sb.set, state="disabled")
+            box = ttk.LabelFrame(right, padding=6, labelwidget=ttk.Frame(right, width=1, height=1))   # 제목 자리 없이 카드만
+            box.grid(row=2 * i + 2, column=0, sticky="we")
+            box.columnconfigure(0, weight=1)
+            t = T.text_box(tk.Text(box, height=1, wrap="none"))
+            t.grid(row=0, column=0, sticky="we")
+            sb = ttk.Scrollbar(box, orient="vertical", command=t.yview)
+            t.configure(yscrollcommand=lambda a, b, sb=sb: self._scroll_set(sb, a, b), state="disabled")
+            sb.grid(row=0, column=1, sticky="ns"); sb.grid_remove()
             self.texts[name] = t
             t.tag_configure("done", background=T.GREEN_L)      # [확인 완료]를 누른 줄
             if name in EDIT_BOXES:
@@ -136,7 +145,6 @@ class CourierTab(ttk.Frame):
                 t.tag_configure("edited", background=T.HILITE)
                 t.tag_configure("mark", foreground=T.GREEN_D)
                 t.tag_configure("cur", background="#F1F1EE")
-                t.configure(spacing1=3, spacing3=3)
                 t.bind("<Button-3>", lambda e, n=name: self._line_menu(n, e))
                 t.bind("<Double-Button-1>", lambda e, n=name: (self._line_edit(n, self._line_at(n, e)), "break")[1])
         # 중요 배송메세지: 우클릭(삭제·수정·되돌리기), 두 번 누르면 수정
@@ -147,7 +155,6 @@ class CourierTab(ttk.Frame):
         mt.tag_configure("edited", background=T.HILITE)
         mt.tag_configure("mark", foreground=T.GREEN_D)
         mt.tag_configure("cur", background="#F1F1EE")
-        mt.configure(spacing1=3, spacing3=3)             # 고칠 때 입력칸이 윗줄·아랫줄을 가리지 않게
         mt.bind("<Button-3>", self._msg_menu)
         mt.bind("<Double-Button-1>", lambda e: (self._msg_edit(self._msg_at(e)), "break")[1])
         put_on_top(self.split_badge.master, self.split_badge)
@@ -214,6 +221,23 @@ class CourierTab(ttk.Frame):
                 if v and name in CHECK_BOXES:
                     self._add_checks(name)
             t.configure(state="disabled")
+            self._fit(name)
+        self.copy_texts = {n: texts.get(n + "|복사", "") for n in BOXES}
+
+    MAX_LINES = 5
+
+    def _scroll_set(self, sb, a, b):
+        sb.set(a, b)
+        (sb.grid_remove if float(a) <= 0 and float(b) >= 1 else sb.grid)()   # 넘칠 때만 스크롤바
+
+    def _fit(self, name):
+        """칸 높이 = 줄 수 (없으면 1줄, 최대 5줄 — 넘치면 칸 안에서 스크롤)"""
+        t = self.texts[name]
+        n = max(1, int(t.index("end-1c").split(".")[0]))
+        if n > self.MAX_LINES:
+            t.configure(height=self.MAX_LINES)          # 5줄 넘는 내용은 칸 안에서 스크롤
+            return
+        t.configure(height=n)
 
     # ---------------------------------------------------------------- 줄마다 [확인 완료] (그날만 기억)
     CHECK_FILE = op.DATA / "courier_checks.json"
@@ -252,7 +276,7 @@ class CourierTab(ttk.Frame):
                 key = orig
             else:
                 key = self._check_key(name, line)
-            lb = tk.Label(t, text="확인 완료", font=T.f(8, True), padx=7, pady=0, cursor="hand2")
+            lb = tk.Label(t, text="확인 완료", font=T.f(7, True), padx=6, pady=0, bd=0, cursor="hand2")
 
             def paint(on, i=i, lb=lb):
                 (t.tag_add if on else t.tag_remove)("done", f"{i}.0", f"{i}.0 lineend +1c")
@@ -296,6 +320,7 @@ class CourierTab(ttk.Frame):
         else:
             self._add_checks(MSG)
         t.configure(state="disabled")
+        self._fit(MSG)
 
     def _msg_at(self, e):
         t = self.texts[MSG]
@@ -469,6 +494,7 @@ class CourierTab(ttk.Frame):
         t.configure(state="normal")
         self._render_edit_box(name, "\n".join(self.box_lines[name]))
         t.configure(state="disabled")
+        self._fit(name)
         self.app.flash("줄을 되돌렸습니다." if new is None else "줄을 지웠습니다 (화면·복사에서만)." if not new.strip()
                        else "줄을 고쳤습니다 (화면·복사에서만).")
 
@@ -485,9 +511,18 @@ class CourierTab(ttk.Frame):
         self._open_editor(self.texts[name], f"{i + 1}.0", cur, save)
 
     def copy(self, name):
+        alt = getattr(self, "copy_texts", {}).get(name) or ""   # 따로 정한 복사 양식 (수제 제작: 상품명 전체, 이전 주문 묶음: 묶음배송 모양)
         if name in EDIT_BOXES and self.box_lines.get(name):
             ed = self._line_edits(name)
-            v = "\n".join(ed.get(l) or l for l in self.box_lines[name] if ed.get(l, None) != "")
+            full = alt.split("\n") if alt else []
+            out = []
+            for k, l in enumerate(self.box_lines[name]):
+                if ed.get(l, None) == "":
+                    continue                                  # 지운 줄은 복사에서 뺌
+                out.append(ed.get(l) or (full[k] if k < len(full) else l))
+            v = "\n".join(out)
+        elif alt:
+            v = alt
         else:
             v = self.texts[name].get("1.0", "end").strip()
         if v and v != "(없음)":
@@ -619,3 +654,30 @@ class CourierTab(ttk.Frame):
             self.refresh()
             self.app.refresh_status()
         self.app.bg(work, done, "카페24에서 주문 불러오는 중...", progress=True)
+
+
+class Tip:
+    """마우스를 올리면 설명 상자를 띄움"""
+
+    def __init__(self, widget, text, wrap=360):
+        self.w, self.text, self.wrap, self.top = widget, text, wrap, None
+        widget.bind("<Enter>", self.show)
+        widget.bind("<Leave>", self.hide)
+
+    def show(self, _=None):
+        if self.top:
+            return
+        x = self.w.winfo_rootx() + self.w.winfo_width() + 6
+        y = self.w.winfo_rooty() - 4
+        self.top = tk.Toplevel(self.w)
+        self.top.wm_overrideredirect(True)
+        self.top.attributes("-topmost", True)
+        tk.Label(self.top, text=self.text, justify="left", wraplength=self.wrap, font=T.f(9), bg="#FFFFFF", fg=T.INK,
+                 relief="solid", bd=1, padx=8, pady=6).pack()
+        self.top.geometry(f"+{x}+{y}")
+
+    def hide(self, _=None):
+        if self.top:
+            self.top.destroy()
+            self.top = None
+

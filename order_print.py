@@ -933,11 +933,27 @@ def handmade_keys():
     return codes, names
 
 
+HM_NAME_SHOW = 10              # 확인 목록에 보여 줄 상품명 글자 수 (코드는 빼고 셈, 복사에는 전체)
+
+
+def short_name(name):
+    """'PDT2431-수제 담수진주 드롭 귀걸이…' → 코드는 다 보여 주고 그 뒤 상품 이름만 10글자"""
+    name = str(name or "")
+    code = product_code(name)
+    head, rest = "", name
+    if code:
+        head, rest = name.split("-", 1)
+        head = head + "-"
+    rest_s = rest.strip()
+    return head + (rest_s if len(rest_s) <= HM_NAME_SHOW else rest_s[:HM_NAME_SHOW].rstrip() + "…")
+
+
 def handmade_lines(orders):
-    """수제 제작 코드의 상품이 든 주문: '주문번호 / 수령인 / 상품명 / 옵션 / 개수' 줄들"""
+    """수제 제작 상품이 든 주문: '주문번호 / 수령인 / 상품명 / 옵션 / 개수' 줄들.
+    돌려줌: (화면용 — 상품명 앞 10글자, 복사용 — 상품명 전체)"""
     codes, names = handmade_keys()
     if not codes and not names:
-        return ""
+        return "", ""
     import order_sheet
     lines = []
     for o in orders:
@@ -946,9 +962,11 @@ def handmade_lines(orders):
             name = it.get("product_name") or it.get("product_name_default") or ""
             if product_code(name) in codes or norm_name(name) in names:
                 qty = int(float(it.get("quantity") or 0))
-                lines.append(f"{o.get('order_id', '')} / {rcv.get('name', '')} / {name} / "
-                             f"{order_sheet._option_text(it) or '-'} / {qty}개")
-    return "\n".join(lines)
+                opt = order_sheet._option_text(it) or "-"
+                short = short_name(name)
+                lines.append((f"{o.get('order_id', '')} / {rcv.get('name', '')} / {short} / {opt} / {qty}개",
+                              f"{o.get('order_id', '')} / {rcv.get('name', '')} / {name} / {opt} / {qty}개"))
+    return "\n".join(a for a, _ in lines), "\n".join(b for _, b in lines)
 
 
 def _delete_extras(url, extra, warnings):
@@ -1003,6 +1021,57 @@ def make_extra_courier(cfg):
     return {"path": path, "analysis": a, "texts": texts, "warnings": warnings}
 
 
+PREV_BUNDLE = "이전 주문과 새 주문 묶음 가능"
+PREV_DAYS = 7                                  # 최근 며칠 택배 파일까지 볼지
+_SHIP_WAIT = {"N10": "상품준비중", "N20": "배송준비중", "N21": "배송대기", "N22": "배송보류"}
+
+
+def _rcv_key(o):
+    """같은 고객 기준: 수령인 이름 + 주소 (띄어쓰기 무시)"""
+    r = (o.get("receivers") or [{}])[0] or {}
+    addr = f"{r.get('address1') or ''}{r.get('address2') or ''}"
+    return "".join(str(r.get("name") or "").split()), "".join(addr.split())
+
+
+def prev_bundle(cfg, token, orders):
+    """최근 PREV_DAYS일 택배 파일에 넣었지만 카페24에서 아직 발송 안 된 주문 중, 오늘 대기 주문과 이름·주소가 같은 것.
+    돌려줌: (화면 글, 복사 글) — 묶음배송 확인과 같은 복사 양식"""
+    done = read_json(COURIER_DONE_FILE, {})
+    cut = (dt.datetime.now() - dt.timedelta(days=PREV_DAYS)).isoformat()
+    today_ids = {o["order_id"] for o in orders}
+    names = {_rcv_key(o)[0] for o in orders}
+    # 출력 기록의 수령인 이름으로 먼저 걸러서 카페24에 물어볼 주문을 줄임
+    rcv_name = {x["order_id"]: "".join(str(x.get("receiver") or "").split()) for b in load_history() for x in b["orders"]}
+    old_ids = [oid for oid, t in done.items()
+               if oid not in today_ids and str(t)[:19] >= cut and "취소" not in str(t) and rcv_name.get(oid) in names]
+    if not old_ids:
+        return "", ""
+    old = fetch_orders_by_ids(cfg, token, old_ids)
+    by_key = {}
+    for o in old:
+        waits = [_SHIP_WAIT[i["order_status"]] for i in o.get("items") or [] if i.get("order_status") in _SHIP_WAIT]
+        if waits:
+            by_key.setdefault(_rcv_key(o), []).append((o, waits[0]))
+    lines, copies = [], []
+    seen = set()
+    for o in orders:
+        k = _rcv_key(o)
+        if k in seen or k not in by_key:
+            continue
+        seen.add(k)
+        new_ids = [x["order_id"] for x in orders if _rcv_key(x) == k]
+        olds = sorted(by_key[k], key=lambda t: t[0]["order_id"])
+        name = (o.get("receivers") or [{}])[0].get("name", "")
+        for oo, st in olds:
+            day = str(done.get(oo["order_id"], ""))[5:10].replace("-", "/")
+            lines.append(f"{name} / 오늘 {', '.join(new_ids)} ↔ 이전 {oo['order_id']} ({day} · {st})")
+        allids = [oo["order_id"] for oo, _ in olds] + new_ids
+        copies.append(f"{name} / {len(allids)}건 묶음 / " + " / ".join(allids))
+    if lines:
+        log.info(f"[이전 주문 묶음] {len(copies)}명: " + ", ".join(c.split(' / ')[0] for c in copies))
+    return "\n".join(lines), "\n".join(copies)
+
+
 def make_courier(cfg, token, ids, create=True, progress=None):
     """ids 주문으로 택배 파일 분석(create=False: 미리보기, 추가배송 안 지움) 또는 생성.
     돌려줌: {analysis, texts, popup, path, excluded, orders, rows, warnings}"""
@@ -1052,7 +1121,14 @@ def make_courier(cfg, token, ids, create=True, progress=None):
     apply_msg_edits(a, warnings)                       # 택배 탭에서 지우거나 고친 배송메세지
     texts = C.summary_texts(a)
     texts["중요 배송메세지 확인"] = msg_lines(a)
-    texts["수제 제작 상품 확인"] = handmade_lines(orders)
+    texts["수제 제작 상품 확인"], texts["수제 제작 상품 확인|복사"] = handmade_lines(orders)
+    try:
+        texts[PREV_BUNDLE], texts[PREV_BUNDLE + "|복사"] = prev_bundle(cfg, token, orders)
+    except AuthError:
+        raise
+    except Exception as e:
+        log.warning(f"[이전 주문 묶음] 카페24 확인 실패: {e}")
+        texts[PREV_BUNDLE], texts[PREV_BUNDLE + "|복사"] = f"(카페24에서 확인하지 못했습니다: {str(e)[:60]})", ""
     result = {"analysis": a, "texts": texts, "popup": C.popup_text(a), "path": None,
               "excluded": excluded, "orders": orders, "rows": rows, "warnings": warnings,
               "split_orders": split_n, "split_rows": sum(1 for r in rows if r.get("_split"))}
