@@ -116,28 +116,35 @@ class CourierTab(ttk.Frame):
         top = ttk.Frame(right, style="Page.TFrame"); top.grid(row=0, column=0, sticky="we")
         self.res_title = ttk.Label(top, text="확인 목록", style="PageTitle.TLabel"); self.res_title.pack(side="left")
         ttk.Label(top, text="   예전 택배 파일:", style="PageHint.TLabel").pack(side="left")
-        self.hist = ttk.Combobox(top, state="readonly", width=34); self.hist.pack(side="left", padx=4)
+        self.hist = ttk.Combobox(top, state="readonly", width=22); self.hist.pack(side="left", padx=4)
         self.hist.bind("<<ComboboxSelected>>", lambda e: self.show_hist())
-        self.texts = {}
+        self.texts, self.checks = {}, {}
         for i, name in enumerate(BOXES):
             # 제목 줄: 제목 · ⓘ(마우스를 올리면 설명) ······ [복사]
             head = ttk.Frame(right, style="Page.TFrame")
-            head.grid(row=2 * i + 1, column=0, sticky="we", pady=(10 if i else 4, 2))
+            head.grid(row=2 * i + 1, column=0, sticky="we", pady=(12 if i else 4, 3))
             ttk.Label(head, text=name, style="Page.TLabel", font=T.f(11, True)).pack(side="left")
             info = tk.Canvas(head, width=17, height=17, bg=T.BG, highlightthickness=0, cursor="question_arrow")
             info.create_oval(1, 1, 16, 16, outline=T.MUTED, width=1.2)
             info.create_text(9, 9, text="?", fill=T.MUTED, font=T.f(8, True))
             info.pack(side="left", padx=(6, 0))
             Tip(info, BOX_HINTS[name])
-            ttk.Button(head, text="복사", width=6, command=lambda n=name: self.copy(n)).pack(side="right")
-            box = ttk.LabelFrame(right, padding=6, labelwidget=ttk.Frame(right, width=1, height=1))   # 제목 자리 없이 카드만
+            cp = T.Pill(head, text="복사", bg=T.CARD, fg=T.INK, outline=T.LINE_STRONG, font=T.f(10, True),
+                        padx=12, pady=2, under=T.BG, radius=10)         # 둥근 작은 버튼
+            cp.configure(cursor="hand2")
+            cp.pack(side="right")
+            cp.bind("<Button-1>", lambda e, n=name: self.copy(n))
+            cp.bind("<Enter>", lambda e, w=cp: w.configure(bg=T.GREEN_L))
+            cp.bind("<Leave>", lambda e, w=cp: w.configure(bg=T.CARD))
+            box = ttk.LabelFrame(right, padding=(6, 4, 6, 5), labelwidget=ttk.Frame(right, width=1, height=1))  # 제목 자리 없이 카드만
             box.grid(row=2 * i + 2, column=0, sticky="we")
             box.columnconfigure(0, weight=1)
-            t = T.text_box(tk.Text(box, height=1, wrap="none"))
+            t = T.text_box(tk.Text(box, height=1, width=20, wrap="word"))     # 창이 좁으면 다음 줄로 (width는 최소 너비)
             t.grid(row=0, column=0, sticky="we")
             sb = ttk.Scrollbar(box, orient="vertical", command=t.yview)
-            t.configure(yscrollcommand=lambda a, b, sb=sb: self._scroll_set(sb, a, b), state="disabled")
-            sb.grid(row=0, column=1, sticky="ns"); sb.grid_remove()
+            t.configure(yscrollcommand=lambda a, b, sb=sb, n=name: self._scroll_set(sb, a, b, n), state="disabled")
+            sb.grid(row=0, column=2, sticky="ns"); sb.grid_remove()
+            t.bind("<Configure>", lambda e, n=name: self._on_resize(n))
             self.texts[name] = t
             t.tag_configure("done", background=T.GREEN_L)      # [확인 완료]를 누른 줄
             if name in EDIT_BOXES:
@@ -214,6 +221,7 @@ class CourierTab(ttk.Frame):
         for name, t in self.texts.items():
             t.configure(state="normal"); t.delete("1.0", "end")
             v = texts.get(name, "")
+            self._clear_checks(name)
             if name in EDIT_BOXES:
                 self._render_edit_box(name, v)
             else:
@@ -226,18 +234,44 @@ class CourierTab(ttk.Frame):
 
     MAX_LINES = 5
 
-    def _scroll_set(self, sb, a, b):
+    def _scroll_set(self, sb, a, b, name=None):
         sb.set(a, b)
         (sb.grid_remove if float(a) <= 0 and float(b) >= 1 else sb.grid)()   # 넘칠 때만 스크롤바
+        if name:
+            self._place_checks(name)
+
+    def _on_resize(self, name):
+        """창 크기가 바뀌면 줄바꿈이 달라지므로 높이와 [확인 완료] 위치를 다시 맞춤"""
+        if getattr(self, "_rs", {}).get(name):
+            return
+        self._rs = getattr(self, "_rs", {})
+        self._rs[name] = True
+
+        def go():
+            self._rs[name] = False
+            self._fit(name)
+        self.after_idle(go)
 
     def _fit(self, name):
-        """칸 높이 = 줄 수 (없으면 1줄, 최대 5줄 — 넘치면 칸 안에서 스크롤)"""
+        """칸 높이 = 화면에 보이는 줄 수 (줄바꿈 포함, 없으면 1줄, 최대 5줄 — 넘치면 칸 안에서 스크롤)"""
         t = self.texts[name]
-        n = max(1, int(t.index("end-1c").split(".")[0]))
-        if n > self.MAX_LINES:
-            t.configure(height=self.MAX_LINES)          # 5줄 넘는 내용은 칸 안에서 스크롤
-            return
-        t.configure(height=n)
+        try:
+            r = t.count("1.0", "end", "update", "displaylines")
+            n = r[0] if isinstance(r, tuple) else (r or 0)
+        except tk.TclError:
+            n = int(t.index("end-1c").split(".")[0])
+        n = max(1, int(n))
+        want = min(self.MAX_LINES, n)
+        if int(t.cget("height")) != want:
+            t.configure(height=want)
+        self.after_idle(lambda: self._place_checks(name))
+
+    def _clear_checks(self, name):
+        for _, lb in self.checks.pop(name, []):
+            lb.destroy()
+
+    def _place_checks(self, name):
+        pass                                             # [확인 완료]는 글 안에 들어 있어 따로 놓을 필요 없음
 
     # ---------------------------------------------------------------- 줄마다 [확인 완료] (그날만 기억)
     CHECK_FILE = op.DATA / "courier_checks.json"
@@ -261,6 +295,7 @@ class CourierTab(ttk.Frame):
     def _add_checks(self, name):
         """줄 끝마다 [확인 완료] — 누르면 줄 전체가 초록색, 다시 누르면 취소. 다음 날이면 모두 지워짐"""
         t = self.texts[name]
+        self._clear_checks(name)
         done = set(self._load_checks().get(name, []))
         state = t.cget("state")
         t.configure(state="normal")
@@ -288,7 +323,8 @@ class CourierTab(ttk.Frame):
                 paint(on)
                 self._save_check(name, key, on)
             lb.bind("<Button-1>", toggle)
-            t.window_create(f"{i}.end", window=lb, padx=10, align="center")
+            t.window_create(f"{i}.end", window=lb, padx=8, align="center")   # 글 바로 뒤 (줄이 내려가면 마지막 줄 끝)
+            self.checks.setdefault(name, []).append((i, lb))
             paint(key in done)
         t.configure(state=state)
 
@@ -302,6 +338,7 @@ class CourierTab(ttk.Frame):
         self.msg_rows = list(a["messages"])
         self.msg_editable = not r.get("path")
         t = self.texts[MSG]
+        self._clear_checks(MSG)
         t.configure(state="normal"); t.delete("1.0", "end")
         for i, row in enumerate(self.msg_rows):
             oid, orig, cur, st = op.msg_state(row)
@@ -446,6 +483,7 @@ class CourierTab(ttk.Frame):
         t = self.texts[name]
         lines = [l for l in str(text or "").split("\n") if l.strip()]
         self.box_lines[name] = lines
+        self._clear_checks(name)
         edits = self._line_edits(name)
         t.delete("1.0", "end")
         for i, orig in enumerate(lines):
