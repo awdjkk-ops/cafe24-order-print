@@ -1,9 +1,13 @@
 # -*- coding: utf-8 -*-
 """택배 발송용 파일(롯데택배 알프스) + 확인 목록 — 웹 도구(cafe24-excel.html)와 같은 규칙으로 만듦.
 입력은 카페24 '엑셀 바로 다운로드'와 같은 형식의 줄(열 이름 → 값 dict) 목록."""
+import datetime as _dt
 import json
+import os
 import re
+import socket
 import time
+from pathlib import Path
 
 import requests
 
@@ -59,9 +63,141 @@ def is_jeju(address):
     return "제주" in s or "서귀포" in s
 
 
+# ---------------------------------------------------------------- 중요 배송메세지 제외 목록 (PC마다 data 폴더에 저장)
+EXCLUDE_FILE = Path(__file__).resolve().parent / "data" / "msg_exclude.json"
+_EXCL_CACHE = {"mtime": None, "set": None}
+
+
+def _pc_name():
+    try:
+        return socket.gethostname() or ""
+    except Exception:
+        return ""
+
+
+def load_exclude():
+    """[{msg, added, pc}] — 파일이 없으면 기본 문구로 처음 만듦. 업데이트해도 이 파일은 바뀌지 않음."""
+    try:
+        with open(EXCLUDE_FILE, encoding="utf-8") as f:
+            items = json.load(f)
+        if isinstance(items, list):
+            return [i for i in items if isinstance(i, dict) and str(i.get("msg", "")).strip()]
+    except FileNotFoundError:
+        items = [{"msg": m, "added": "기본", "pc": ""} for m in sorted(TRIVIAL_DELIVERY_MESSAGES)]
+        try:
+            save_exclude(items)
+        except OSError:
+            pass
+        return items
+    except (ValueError, OSError):
+        pass
+    return [{"msg": m, "added": "기본", "pc": ""} for m in sorted(TRIVIAL_DELIVERY_MESSAGES)]
+
+
+def save_exclude(items):
+    EXCLUDE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = Path(str(EXCLUDE_FILE) + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(items, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, EXCLUDE_FILE)
+    _EXCL_CACHE["mtime"] = None
+
+
+def exclude_set():
+    try:
+        mt = EXCLUDE_FILE.stat().st_mtime
+    except OSError:
+        mt = None
+    if _EXCL_CACHE["set"] is None or mt is None or mt != _EXCL_CACHE["mtime"]:
+        _EXCL_CACHE["set"] = {str(i["msg"]).strip() for i in load_exclude()}
+        try:
+            _EXCL_CACHE["mtime"] = EXCLUDE_FILE.stat().st_mtime
+        except OSError:
+            _EXCL_CACHE["mtime"] = None
+    return _EXCL_CACHE["set"]
+
+
+def add_exclude(msgs, replace=False):
+    """문구 추가 (앞뒤 공백만 지우고 그대로). 새로 들어간 문구 목록을 돌려줌."""
+    items = [] if replace else load_exclude()
+    have = {str(i["msg"]).strip() for i in items}
+    today, pc = f"{_dt.date.today():%Y-%m-%d}", _pc_name()
+    added = []
+    for m in msgs:
+        if isinstance(m, dict):
+            t, when, who = str(m.get("msg", "")).strip(), m.get("added") or today, m.get("pc", pc)
+        else:
+            t, when, who = str(m or "").strip(), today, pc
+        if t and t not in have:
+            items.append({"msg": t, "added": str(when), "pc": str(who or "")})
+            have.add(t)
+            added.append(t)
+    save_exclude(items)
+    return added
+
+
+def remove_exclude(msgs):
+    gone = {str(m).strip() for m in msgs}
+    items = [i for i in load_exclude() if str(i["msg"]).strip() not in gone]
+    save_exclude(items)
+    return items
+
+
+def write_exclude_xlsx(path, items):
+    """제외 목록 엑셀 (A 메세지, B 추가한 날, C 추가한 PC)"""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "배송메세지제외목록"
+    ws.append(["메세지 (완전히 같은 문장만 제외)", "추가한 날", "추가한 PC"])
+    for c in ws[1]:
+        c.font = Font(bold=True); c.fill = PatternFill("solid", fgColor="E7F5EE")
+    for i in items:
+        ws.append([str(i.get("msg", "")), str(i.get("added", "")), str(i.get("pc", ""))])
+    for col, w in (("A", 50), ("B", 14), ("C", 18)):
+        ws.column_dimensions[col].width = w
+    wb.save(path)
+    return path
+
+
+def read_exclude_file(path):
+    """엑셀·CSV·메모장 → [{msg, added, pc}] (엑셀은 머리줄 건너뜀, 메모장은 한 줄에 하나)"""
+    path = Path(path)
+    out = []
+    if path.suffix.lower() in (".xlsx", ".xlsm"):
+        from openpyxl import load_workbook
+        ws = load_workbook(path, read_only=True, data_only=True).worksheets[0]
+        for n, r in enumerate(ws.iter_rows(values_only=True)):
+            a = "" if not r or r[0] is None else str(r[0]).strip()
+            if not a or (n == 0 and a.startswith("메세지")):
+                continue
+            b = "" if len(r) < 2 or r[1] is None else str(r[1]).strip()
+            c = "" if len(r) < 3 or r[2] is None else str(r[2]).strip()
+            out.append({"msg": a, "added": b, "pc": c})
+        return out
+    data = path.read_bytes()
+    for enc in ("utf-8-sig", "cp949"):
+        try:
+            text = data.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        raise ValueError("파일 글자를 읽지 못했습니다 (UTF-8 또는 한글 윈도우 형식으로 저장해 주세요)")
+    if path.suffix.lower() == ".csv":
+        import csv, io
+        for n, r in enumerate(csv.reader(io.StringIO(text))):
+            a = r[0].strip() if r else ""
+            if a and not (n == 0 and a.startswith("메세지")):
+                out.append({"msg": a, "added": r[1].strip() if len(r) > 1 else "", "pc": r[2].strip() if len(r) > 2 else ""})
+        return out
+    return [{"msg": l.strip(), "added": "", "pc": ""} for l in text.splitlines() if l.strip()]
+
+
 def is_important_message(msg):
     t = str(msg or "").strip()
-    return t != "" and t not in TRIVIAL_DELIVERY_MESSAGES
+    return t != "" and t not in exclude_set()
 
 
 # ---------------------------------------------------------------- 계산

@@ -1,12 +1,13 @@
 {
-  "version": "1.0.30",
-  "notes": "· 택배 탭 확인 목록: 긴 글은 창 폭에 맞춰 줄바꿈([확인 완료]는 글 끝에), 제목과 칸 간격 줄임, [복사] 버튼을 제목 크기의 둥근 버튼으로",
+  "version": "1.0.31",
+  "notes": "· 중요 배송메세지 제외 목록: 택배 탭 우클릭 [제외 목록에 추가], 관리 탭에서 전체 보기·추가·삭제·내보내기·가져오기(완전히 같은 문장만 제외, PC마다 저장)\n· 관리 탭 [데이터 백업]: data 폴더+설정을 zip 하나로 백업, 백업에서 되돌리기",
   "packages": [],
   "files": [
     "auto_print.bat",
     "boot_check.bat",
     "courier.py",
     "create_shortcuts.ps1",
+    "data_backup.py",
     "first_auth.bat",
     "gui_admin.py",
     "gui_courier.py",

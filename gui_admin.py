@@ -7,6 +7,8 @@ import tkinter as tk
 import webbrowser
 from tkinter import ttk, messagebox
 
+import courier as C
+import data_backup as DB
 import order_print as op
 import print_schedule as sch
 from gui_schedule import hint
@@ -103,6 +105,57 @@ class AdminTab(ttk.Frame):
         ttk.Button(bb, text="저장", command=self.save_cal).pack(side="left")
         ttk.Button(bb, text="맞춤 확인용 인쇄", command=self.print_cal).pack(side="left", padx=6)
         ttk.Button(bb, text="0으로 되돌리기", command=self.reset_cal).pack(side="left")
+
+        # 2-3. 중요 배송메세지 제외 목록 (택배 탭 '중요 배송메세지 확인'에서 뺄 문구)
+        f = ttk.LabelFrame(left, text=" 중요 배송메세지 제외 목록 ", padding=10)
+        f.grid(row=5, column=0, sticky="we", pady=(10, 0))
+        hint(f, "여기 있는 문구와 완전히 같은 배송메세지는 택배 탭 '중요 배송메세지 확인'에 나오지 않습니다 (앞뒤 공백만 무시, "
+                "띄어쓰기·마침표가 다르면 다른 문구). 택배 탭에서 메세지를 우클릭 → [제외 목록에 추가]로도 넣을 수 있습니다. "
+                "이 PC의 data 폴더에 저장되며, 업데이트해도 그대로입니다.", row=0, column=0, columnspan=3, sticky="w",
+             pady=(0, 6), wrap=560)
+        self.ex_entry = ttk.Entry(f, width=44); self.ex_entry.grid(row=1, column=0, sticky="we")
+        self.ex_entry.bind("<Return>", lambda e: self.ex_add())
+        ttk.Button(f, text="추가", style="Accent.TButton", command=self.ex_add).grid(row=1, column=1, padx=6)
+        ttk.Button(f, text="여러 개 붙여넣기", command=lambda: ExcludeImport(self)).grid(row=1, column=2, sticky="w")
+        sf = ttk.Frame(f); sf.grid(row=2, column=0, columnspan=3, sticky="we", pady=(8, 0))
+        ttk.Label(sf, text="검색").pack(side="left")
+        self.ex_q = tk.StringVar()
+        self.ex_q.trace_add("write", lambda *a: self.ex_show())
+        ttk.Entry(sf, textvariable=self.ex_q, width=20).pack(side="left", padx=(4, 8))
+        self.ex_cnt = ttk.Label(sf, text="", style="Hint.TLabel"); self.ex_cnt.pack(side="left")
+        tf = ttk.Frame(f); tf.grid(row=3, column=0, columnspan=3, sticky="we", pady=(6, 0))
+        self.ex_tv = ttk.Treeview(tf, columns=("msg", "day", "pc"), show="headings", height=7, selectmode="extended")
+        for c, t_, w in (("msg", "메세지", 330), ("day", "추가한 날", 90), ("pc", "추가한 PC", 110)):
+            self.ex_tv.heading(c, text=t_); self.ex_tv.column(c, width=w, stretch=(c == "msg"))
+        self.ex_tv.tag_configure("new", background=T.HILITE)
+        sb = ttk.Scrollbar(tf, orient="vertical", command=self.ex_tv.yview)
+        self.ex_tv.configure(yscrollcommand=sb.set)
+        self.ex_tv.pack(side="left", fill="both", expand=True); sb.pack(side="left", fill="y")
+        self.ex_tv.bind("<Delete>", lambda e: self.ex_delete())
+        bf = ttk.Frame(f); bf.grid(row=4, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        ttk.Button(bf, text="선택한 문구 삭제", command=self.ex_delete).pack(side="left")
+        ttk.Button(bf, text="새로고침", command=self.ex_show).pack(side="left", padx=6)
+        ttk.Button(bf, text="제외 목록 내보내기", command=self.ex_export).pack(side="left")
+        ttk.Button(bf, text="제외 목록 가져오기", command=self.ex_import).pack(side="left", padx=6)
+        hint(f, "다른 PC로 옮기기: [제외 목록 내보내기]로 엑셀을 저장해 옮긴 뒤, 그 PC에서 [제외 목록 가져오기] → '합치기'. "
+                "초록색 줄은 오늘 추가한 문구입니다.", row=5, column=0, columnspan=3, sticky="w", pady=(4, 0), wrap=560)
+        self.ex_map = {}
+        self.ex_show()
+
+        # 2-4. 데이터 백업
+        f = ttk.LabelFrame(left, text=" 데이터 백업 ", padding=10)
+        f.grid(row=6, column=0, sticky="we", pady=(10, 0))
+        hint(f, "수제 코드·배송메세지 제외 목록·출력 기록·세금계산서 내역·확인 기록 등 data 폴더 전체와 설정(config.json·settings.json, "
+                "카페24 접속 정보 포함)을 압축파일 하나로 저장합니다. 상품 사진은 크고 다시 받아지므로 빼고 저장합니다.",
+             row=0, column=0, columnspan=2, sticky="w", pady=(0, 6), wrap=560)
+        bkf = ttk.Frame(f); bkf.grid(row=1, column=0, columnspan=2, sticky="w")
+        ttk.Button(bkf, text="전체 데이터 백업 받기", style="Accent.TButton", command=self.backup_now).pack(side="left")
+        ttk.Button(bkf, text="백업에서 되돌리기", command=self.backup_restore).pack(side="left", padx=6)
+        self.bk_lb = ttk.Label(f, text="", style="Hint.TLabel"); self.bk_lb.grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        hint(f, "되돌리기: 되돌리기 직전 상태를 data_backups 폴더에 자동으로 한 번 더 저장한 뒤 바꿉니다. 이미 뽑은 주문·택배 파일에 "
+                "넣은 주문 기록은 합쳐서 다시 출력되거나 송장이 겹치지 않게 하고, 카페24 인증은 지금 PC 것을 그대로 씁니다. "
+                "되돌린 뒤에는 프로그램을 다시 켭니다.", row=3, column=0, columnspan=2, sticky="w", pady=(4, 0), wrap=560)
+        self.bk_show()
 
         # 3. 저장 공간
         f = ttk.LabelFrame(right, text=" 저장 공간 ", padding=10); f.grid(row=0, column=0, sticky="we")
@@ -261,6 +314,149 @@ class AdminTab(ttk.Frame):
             messagebox.showinfo("엑셀로 내보내기", "등록된 코드가 없습니다.")
             return
         self._hm_save_xlsx("엑셀로 내보내기", f"수제제작코드_{op.dt.date.today():%Y%m%d}.xlsx", items)
+
+    # ---------------------------------------------------------------- 중요 배송메세지 제외 목록
+    def ex_show(self):
+        if not hasattr(self, "ex_tv"):
+            return
+        self.ex_tv.delete(*self.ex_tv.get_children())
+        items = C.load_exclude()
+        today = op.dt.date.today().isoformat()
+        mine = sorted([i for i in reversed(items) if i.get("added") != "기본"], key=lambda i: str(i.get("added", "")), reverse=True)
+        base = sorted([i for i in items if i.get("added") == "기본"], key=lambda i: str(i["msg"]))
+        q = self.ex_q.get().strip()
+        self.ex_map = {}
+        shown = 0
+        for n, i in enumerate(mine + base):
+            msg = str(i["msg"])
+            if q and q not in msg:
+                continue
+            iid = f"x{n}"
+            self.ex_map[iid] = msg
+            self.ex_tv.insert("", "end", iid=iid, values=(msg.replace("\n", " ⏎ "), i.get("added", ""), i.get("pc", "")),
+                              tags=("new",) if i.get("added") == today else ())
+            shown += 1
+        self.ex_cnt.configure(text=f"총 {len(items)}개" + (f" · 검색 결과 {shown}개" if q else "")
+                                   + f" · 기본 {len(base)} · 추가 {len(mine)}")
+
+    def ex_refresh(self):
+        self.ex_show()
+        self._hm_refresh_courier()
+
+    def ex_add(self):
+        msg = self.ex_entry.get().strip()
+        if not msg:
+            return
+        if not C.add_exclude([msg]):
+            messagebox.showinfo("제외 목록", f"'{msg}'는 이미 제외 목록에 있습니다.")
+            return
+        op.log.info(f"[제외 목록] 추가: {msg}")
+        self.ex_entry.delete(0, "end")
+        self.ex_q.set("")
+        self.ex_refresh()
+        self.app.flash(f"'{msg[:30]}'를 제외 목록에 추가했습니다.")
+
+    def ex_delete(self):
+        sel = [self.ex_map[i] for i in self.ex_tv.selection() if i in self.ex_map]
+        if not sel:
+            messagebox.showinfo("제외 목록", "목록에서 지울 문구를 골라 주세요.")
+            return
+        show = "\n".join(f"· {m}" for m in sel[:12]) + ("\n…" if len(sel) > 12 else "")
+        if not messagebox.askyesno("제외 목록", f"문구 {len(sel)}개를 제외 목록에서 지울까요?\n지우면 이 메세지가 다시 "
+                                              f"'중요 배송메세지 확인'에 나옵니다.\n\n{show}"):
+            return
+        C.remove_exclude(sel)
+        op.log.info(f"[제외 목록] 삭제: {', '.join(sel)}")
+        self.ex_refresh()
+
+    def ex_export(self):
+        from tkinter import filedialog
+        items = C.load_exclude()
+        path = filedialog.asksaveasfilename(title="제외 목록 내보내기", defaultextension=".xlsx",
+                                            initialfile=f"배송메세지제외목록_{op.dt.date.today():%Y%m%d}.xlsx",
+                                            filetypes=[("엑셀 파일", "*.xlsx")])
+        if not path:
+            return
+        try:
+            C.write_exclude_xlsx(path, items)
+        except Exception as e:
+            messagebox.showerror("제외 목록 내보내기", f"저장하지 못했습니다 (파일이 열려 있으면 닫고 다시 해 주세요).\n\n{e}")
+            return
+        self.app.flash(f"{os.path.basename(path)} 를 저장했습니다 ({len(items)}개).")
+        op.open_file(os.path.dirname(path))
+
+    def ex_import(self):
+        from tkinter import filedialog
+        path = filedialog.askopenfilename(title="제외 목록 파일 고르기",
+                                          filetypes=[("엑셀·CSV·메모장", "*.xlsx *.xlsm *.csv *.txt"), ("모든 파일", "*.*")])
+        if not path:
+            return
+        try:
+            rows = C.read_exclude_file(path)
+        except Exception as e:
+            messagebox.showerror("제외 목록 가져오기", f"파일을 읽지 못했습니다.\n\n{e}")
+            return
+        if not rows:
+            messagebox.showinfo("제외 목록 가져오기", "파일에서 문구를 찾지 못했습니다.")
+            return
+        ExcludeImport(self, rows, source=os.path.basename(path))
+
+    # ---------------------------------------------------------------- 데이터 백업
+    def bk_show(self):
+        b = DB.last_backup()
+        if b:
+            t = str(b.get("time", "")).replace("T", " ")[:16]
+            self.bk_lb.configure(text=f"마지막 백업: {t}" + (f" ({b['pc']})" if b.get("pc") else ""))
+        else:
+            self.bk_lb.configure(text="마지막 백업: 아직 없음")
+
+    def backup_now(self):
+        from tkinter import filedialog
+        path = filedialog.asksaveasfilename(title="전체 데이터 백업 저장", defaultextension=".zip",
+                                            initialfile=f"데이터백업_{op.dt.datetime.now():%Y%m%d_%H%M}.zip",
+                                            filetypes=[("압축 파일", "*.zip")])
+        if not path:
+            return
+        try:
+            p, n = DB.make_backup(path)
+        except Exception as e:
+            messagebox.showerror("데이터 백업", f"백업하지 못했습니다.\n\n{e}")
+            return
+        op.log.info(f"[데이터 백업] {p} ({n}개 파일)")
+        self.bk_show()
+        messagebox.showinfo("데이터 백업", f"백업했습니다 ({n}개 파일).\n\n{p}\n\n"
+                                         "카페24 접속 정보가 들어 있으니 사무실 밖으로 보내지 마세요.")
+        op.open_file(os.path.dirname(str(p)))
+
+    def backup_restore(self):
+        from tkinter import filedialog
+        path = filedialog.askopenfilename(title="되돌릴 백업 파일 고르기", filetypes=[("압축 파일", "*.zip")])
+        if not path:
+            return
+        try:
+            info = DB.read_info(path)
+        except Exception as e:
+            messagebox.showerror("백업에서 되돌리기", str(e))
+            return
+        t = str(info.get("time", "")).replace("T", " ")[:16]
+        if not messagebox.askyesno("백업에서 되돌리기",
+                                   f"이 백업으로 되돌릴까요?\n\n백업한 때: {t}\n백업한 PC: {info.get('pc') or '-'}\n"
+                                   f"프로그램 버전: {info.get('version') or '-'} · 파일 {info.get('files', 0)}개\n\n"
+                                   "수제 코드·제외 목록·설정·세금계산서 내역 등이 이 백업 때로 바뀝니다.\n"
+                                   "(지금 상태는 data_backups 폴더에 자동으로 저장해 둡니다. "
+                                   "이미 뽑은 주문·택배 파일 기록은 합쳐서 다시 출력되지 않습니다.)", icon="warning"):
+            return
+        try:
+            auto, _ = DB.restore(path)
+        except Exception as e:
+            op.log.exception("[데이터 백업] 되돌리기 실패")
+            messagebox.showerror("백업에서 되돌리기", f"되돌리지 못했습니다.\n\n{e}")
+            return
+        op.log.info(f"[데이터 백업] 되돌림: {path} (되돌리기 전 자동 백업: {auto})")
+        if messagebox.askyesno("백업에서 되돌리기", "되돌렸습니다. 바뀐 내용을 쓰려면 프로그램을 다시 켜야 합니다.\n\n지금 다시 켤까요?"):
+            import updater
+            updater.restart_manager()
+            self.app.destroy()
 
     def _hm_refresh_courier(self):
         ct = getattr(self.app, "courier_tab", None)
@@ -482,6 +678,87 @@ class AdminTab(ttk.Frame):
         logs = sorted(op.LOG_DIR.glob("*.log"))
         if logs:
             op.open_file(logs[-1])
+
+
+class ExcludeImport(tk.Toplevel):
+    """제외 목록 한꺼번에 넣기: 붙여넣기(한 줄에 하나) 또는 파일 → 합치기 / 바꾸기"""
+
+    def __init__(self, tab, rows=None, source=None):
+        super().__init__(tab.app)
+        self.tab, self.rows = tab, rows
+        self.title("제외 목록 가져오기" if rows is not None else "제외 목록 여러 개 붙여넣기")
+        self.configure(background=T.CARD)
+        self.transient(tab.app)
+        f = ttk.Frame(self, padding=18); f.pack(fill="both", expand=True)
+        f.columnconfigure(0, weight=1)
+        ttk.Label(f, text=f"파일: {source}" if source else "문구 붙여넣기", style="Title.TLabel").grid(row=0, column=0, sticky="w")
+        self.box = None
+        if rows is None:
+            hint(f, "한 줄에 문구 하나. 앞뒤 공백만 지우고 그대로 넣습니다 (완전히 같은 메세지만 제외).",
+                 row=1, column=0, sticky="w", pady=(4, 6), wrap=480)
+            self.box = T.text_box(tk.Text(f, width=56, height=12, wrap="none"))
+            self.box.grid(row=2, column=0, sticky="nsew"); f.rowconfigure(2, weight=1)
+            self.box.bind("<KeyRelease>", lambda e: self.summary())
+            self.box.bind("<<Paste>>", lambda e: self.after(50, self.summary))
+        self.sum_lb = ttk.Label(f, text="", justify="left", wraplength=480)
+        self.sum_lb.grid(row=3, column=0, sticky="w", pady=(10, 0))
+        self.mode = tk.StringVar(value="add")
+        mf = ttk.Frame(f); mf.grid(row=4, column=0, sticky="w", pady=(10, 0))
+        ttk.Radiobutton(mf, text="합치기 — 지금 목록은 그대로 두고 없는 것만 추가 (추천)", value="add",
+                        variable=self.mode, command=self.summary).pack(anchor="w")
+        ttk.Radiobutton(mf, text="바꾸기 — 지금 목록을 지우고 이 내용으로 교체", value="replace",
+                        variable=self.mode, command=self.summary).pack(anchor="w")
+        bf = ttk.Frame(f); bf.grid(row=5, column=0, sticky="we", pady=(12, 0))
+        ttk.Button(bf, text="가져오기", style="Accent.TButton", command=self.ok).pack(side="right")
+        ttk.Button(bf, text="취소", command=self.destroy).pack(side="right", padx=6)
+        self.summary()
+        self.update_idletasks()
+        app = tab.app
+        x = app.winfo_rootx() + (app.winfo_width() - self.winfo_width()) // 2
+        self.geometry(f"+{max(0, x)}+{max(0, app.winfo_rooty() + 80)}")
+        self.grab_set()
+        (self.box or self).focus_set()
+
+    def _rows(self):
+        if self.rows is not None:
+            src = self.rows
+        else:
+            src = [{"msg": l} for l in self.box.get("1.0", "end").splitlines()]
+        out, seen = [], set()
+        for r in src:
+            m = str(r.get("msg", "")).strip()
+            if m and m not in seen:
+                seen.add(m); out.append({**r, "msg": m})
+        return out
+
+    def summary(self):
+        rows = self._rows()
+        have = {str(i["msg"]).strip() for i in C.load_exclude()}
+        new = [r["msg"] for r in rows if r["msg"] not in have]
+        lines = [f"넣을 문구 {len(rows)}개", f"· 새로 추가될 문구 {len(new)}개"]
+        lines += [f"     {m}" for m in new[:3]] + ([f"     … 외 {len(new) - 3}개"] if len(new) > 3 else [])
+        lines.append(f"· 이미 있는 문구 {len(rows) - len(new)}개 (그대로 둠)")
+        if self.mode.get() == "replace":
+            gone = len(have - {r["msg"] for r in rows})
+            lines.append(f"· 바꾸기: 지금 목록에서 빠지는 문구 {gone}개")
+        self.sum_lb.configure(text="\n".join(lines))
+
+    def ok(self):
+        rows = self._rows()
+        if not rows:
+            messagebox.showwarning("가져오기", "넣을 문구가 없습니다.", parent=self)
+            return
+        replace = self.mode.get() == "replace"
+        if replace:
+            cur = len(C.load_exclude())
+            if not messagebox.askyesno("바꾸기", f"지금 목록 {cur}개를 지우고 {len(rows)}개로 바꿀까요?", parent=self):
+                return
+        added = C.add_exclude(rows, replace=replace)
+        op.log.info(f"[제외 목록] 가져오기({'바꾸기' if replace else '합치기'}): 새 {len(added)}개, 전체 {len(rows)}개")
+        self.destroy()
+        self.tab.ex_q.set("")
+        self.tab.ex_refresh()
+        self.tab.app.flash(f"제외 목록 가져오기: {'바꾸기 완료' if replace else f'새 문구 {len(added)}개 추가'}")
 
 
 class HandmadeImport(tk.Toplevel):

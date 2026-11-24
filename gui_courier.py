@@ -5,6 +5,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import ttk, messagebox
 
+import courier as C
 import order_print as op
 from gui_schedule import hint
 import theme as T
@@ -15,7 +16,7 @@ EDIT_BOXES = ("묶음배송 확인", "제주도 확인", "수제 제작 상품 �
 BOXES = ["묶음배송 확인", "제주도 확인", "중요 배송메세지 확인", "수제 제작 상품 확인", op.PREV_BUNDLE, "추가배송 포함", "블랙리스트·경계대상", "주소 '~' 변경 확인"]
 BOX_HINTS = {
     "묶음배송 확인": "이름·주소가 같은 주문 (택배 파일에 노란색). 우클릭: 지우기·고치기 (화면·복사만)",
-    "중요 배송메세지 확인": "흔한 메세지를 뺀 배송메세지. 우클릭: 지우기·고치기, 두 번 누르면 바로 고치기 (택배 파일에만 반영)",
+    "중요 배송메세지 확인": "흔한 메세지를 뺀 배송메세지. 우클릭: 지우기·고치기·제외 목록에 추가, 두 번 누르면 바로 고치기 (택배 파일에만 반영)",
     "블랙리스트·경계대상": "택배 파일에 빨강(블랙리스트)·파랑(경계대상)으로 표시됩니다.",
     op.PREV_BUNDLE: "최근 7일 택배 파일에 넣었지만 카페24에서 아직 발송 처리 안 된 주문(보관 중)과 수령인 이름·주소가 같은 오늘 주문입니다. "
                     "알려 주기만 하고 택배 파일에는 영향이 없습니다. 카페24 발송 처리를 한 뒤에 보세요. [복사]는 묶음배송 확인과 같은 모양입니다.",
@@ -368,22 +369,40 @@ class CourierTab(ttk.Frame):
         i = self._msg_at(e)
         if i is None:
             return
-        if not self.msg_editable:
-            self.app.flash("이미 만든 택배 파일의 메세지는 바꿀 수 없습니다. 대기 주문 미리 확인에서 바꿔 주세요.")
-            return
         t = self.texts[MSG]
         t.tag_remove("cur", "1.0", "end"); t.tag_add("cur", f"{i + 1}.0", f"{i + 1}.end")
         m = tk.Menu(self, tearoff=0, font=T.f(10))
-        m.add_command(label="배송 메세지 삭제", command=lambda: self._msg_set(i, ""))
-        m.add_command(label="배송 메세지 수정", command=lambda: self._msg_edit(i))
-        if self.msg_rows[i].get("msgState"):
+        if self.msg_editable:
+            m.add_command(label="배송 메세지 삭제", command=lambda: self._msg_set(i, ""))
+            m.add_command(label="배송 메세지 수정", command=lambda: self._msg_edit(i))
+            if self.msg_rows[i].get("msgState"):
+                m.add_command(label="원래 메세지로 되돌리기", command=lambda: self._msg_set(i, None))
             m.add_separator()
-            m.add_command(label="원래 메세지로 되돌리기", command=lambda: self._msg_set(i, None))
+        m.add_command(label="제외 목록에 추가", command=lambda: self._msg_exclude(i))
         try:
             m.tk_popup(e.x_root, e.y_root)
         finally:
             m.grab_release()
             self.after(300, lambda: t.tag_remove("cur", "1.0", "end"))
+
+    def _msg_exclude(self, i):
+        """이 메세지(원래 글 그대로)를 제외 목록에 넣고 칸에서 뺌. 같은 메세지의 다른 주문도 함께 빠짐"""
+        if i is None or i >= len(self.msg_rows):
+            return
+        _, orig, _, _ = op.msg_state(self.msg_rows[i])
+        msg = str(orig).strip()
+        if not msg:
+            return
+        self._end_edit(False)
+        C.add_exclude([msg])
+        a = (self.last or {}).get("analysis") or {}
+        if a.get("messages") is not None:
+            a["messages"] = [r for r in a["messages"] if str(op.msg_state(r)[1]).strip() != msg]
+        self._fill_messages(self.last)
+        adm = getattr(self.app, "admin_tab", None)
+        if adm is not None and hasattr(adm, "ex_refresh"):
+            adm.ex_refresh()
+        messagebox.showinfo("제외 목록", f"'{msg}'\n\n제외 목록에 추가되었습니다.", parent=self)
 
     def _msg_set(self, i, new):
         """new="" 지우기, 글=고치기, None=되돌리기"""
